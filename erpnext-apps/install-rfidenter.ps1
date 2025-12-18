@@ -42,6 +42,32 @@ if (Test-Path $Dst) {
 Write-Host "Copying rfidenter app into bench..."
 Copy-Item -Recurse -Force $AppSrc (Join-Path $BenchDir "apps")
 
+try {
+  $appsFile = Join-Path $BenchDir "sites/apps.txt"
+  New-Item -ItemType Directory -Force -Path (Join-Path $BenchDir "sites") | Out-Null
+  if (!(Test-Path $appsFile)) { New-Item -ItemType File -Force $appsFile | Out-Null }
+  $lines = Get-Content $appsFile -ErrorAction SilentlyContinue
+  if ($lines -notcontains "rfidenter") { Add-Content -Path $appsFile -Value "rfidenter" }
+} catch {
+  Write-Warning "Could not update sites/apps.txt. If install fails, add 'rfidenter' to $BenchDir/sites/apps.txt"
+}
+
+try {
+  $pip = Join-Path $BenchDir "env/Scripts/pip.exe"
+  $pipLinux = Join-Path $BenchDir "env/bin/pip"
+  if (Test-Path $pip) {
+    Write-Host "Installing python package (editable)..."
+    & $pip install -e (Join-Path $BenchDir "apps/rfidenter")
+  } elseif (Test-Path $pipLinux) {
+    Write-Host "Installing python package (editable)..."
+    & $pipLinux install -e (Join-Path $BenchDir "apps/rfidenter")
+  } else {
+    Write-Warning "pip not found. If install fails, run: pip install -e $BenchDir/apps/rfidenter"
+  }
+} catch {
+  Write-Warning "pip install failed. You may need to run: pip install -e $BenchDir/apps/rfidenter"
+}
+
 Write-Host "Installing / migrating..."
 $apps = & $BenchCmd --site $Site list-apps
 if ($apps -match "^rfidenter\b") {

@@ -42,6 +42,20 @@ cd "${BENCH_DIR}"
 
 mkdir -p apps
 
+# Ensure redis is available (needed for migrate/uninstall/install in many cases).
+if command -v redis-cli >/dev/null 2>&1; then
+  if ! redis-cli -p 11000 ping >/dev/null 2>&1; then
+    if command -v redis-server >/dev/null 2>&1 && [[ -f "${BENCH_DIR}/config/redis_queue.conf" ]]; then
+      redis-server "${BENCH_DIR}/config/redis_queue.conf" --daemonize yes || true
+    fi
+  fi
+  if ! redis-cli -p 13000 ping >/dev/null 2>&1; then
+    if command -v redis-server >/dev/null 2>&1 && [[ -f "${BENCH_DIR}/config/redis_cache.conf" ]]; then
+      redis-server "${BENCH_DIR}/config/redis_cache.conf" --daemonize yes || true
+    fi
+  fi
+fi
+
 if [[ -d "apps/rfidenter" ]]; then
   TS="$(date +%Y%m%d_%H%M%S)"
   echo "Backup: apps/rfidenter -> apps/rfidenter.bak.${TS}"
@@ -50,6 +64,35 @@ fi
 
 echo "Copying rfidenter app into bench..."
 cp -a "${APP_SRC}" "apps/"
+
+APPS_FILE="${BENCH_DIR}/sites/apps.txt"
+mkdir -p "${BENCH_DIR}/sites"
+touch "${APPS_FILE}"
+# Ensure trailing newline to avoid "erpnext"+"rfidenter" => "erpnextrfidenter"
+if [[ -s "${APPS_FILE}" ]]; then
+  last_char="$(tail -c 1 "${APPS_FILE}" || true)"
+  if [[ "${last_char}" != $'\n' ]]; then
+    echo >> "${APPS_FILE}"
+  fi
+fi
+if ! grep -qxF "rfidenter" "${APPS_FILE}"; then
+  echo "rfidenter" >> "${APPS_FILE}"
+fi
+
+PIP_CMD="pip"
+if [[ -x "${BENCH_DIR}/env/bin/pip" ]]; then
+  PIP_CMD="${BENCH_DIR}/env/bin/pip"
+elif command -v pip >/dev/null 2>&1; then
+  PIP_CMD="pip"
+else
+  echo "WARN: pip not found. If install fails, run: pip install -e ${BENCH_DIR}/apps/rfidenter"
+  PIP_CMD=""
+fi
+
+if [[ -n "${PIP_CMD}" ]]; then
+  echo "Installing python package (editable)..."
+  "${PIP_CMD}" install -e "${BENCH_DIR}/apps/rfidenter"
+fi
 
 echo "Installing / migrating..."
 if "${BENCH_CMD}" --site "${SITE}" list-apps | grep -q "^rfidenter\\b"; then
