@@ -1,0 +1,2 @@
+"""RFIDenter settings page."""
+

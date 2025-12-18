@@ -1,0 +1,868 @@
+<!doctype html>
+<html lang="uz">
+
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>ST-8504 / UHFReader288 — Localhost (Veb)</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@700;800;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+
+<body>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <div class="brand">
+        <div class="brand-title">ST-8504 / UHFReader288</div>
+        <div class="brand-sub">Localhost veb interfeys (TCP/IP + USB/RS232)</div>
+      </div>
+      <div class="status-row">
+        <button class="theme-toggle" id="themeToggle" type="button" title="Tema o'zgartirish">🎨 Tema</button>
+        <div class="status subtle" id="backendPill" title="Server (Node.js + Java bridge)">Server: …</div>
+        <div class="status" id="statusPill">Qurilma: Ulanmagan</div>
+        <div class="status subtle" id="invPill">Skan: O'chiq</div>
+      </div>
+    </div>
+
+    <nav class="tabs tabs-main" id="mainTabs" aria-label="Asosiy bo‘limlar">
+      <button class="tab active" type="button" data-main="reader">Reader settings</button>
+      <button class="tab" type="button" data-main="c1g2">EPCC1-G2</button>
+      <button class="tab" type="button" data-main="gjb">GJB-test</button>
+      <button class="tab" type="button" data-main="iso6b">18000-6B</button>
+      <button class="tab" type="button" data-main="net">Network module config</button>
+      <button class="tab" type="button" data-main="aloqa">Aloqa</button>
+    </nav>
+
+    <nav class="tabs tabs-sub" id="subTabs" aria-label="Ichki bo‘limlar"></nav>
+  </header>
+
+  <main class="container">
+    <section class="card module" data-main="reader" data-sub="basic">
+      <h2>Basic (Reader settings)</h2>
+
+      <div class="basic-layout">
+        <div class="panel">
+          <h3>Ulanish (Connect)</h3>
+          <div class="grid">
+            <label>
+              <span>Ulanish turi</span>
+              <select id="connMode">
+                <option value="tcp" selected>TCP/IP (LAN)</option>
+                <option value="serial">USB/RS232 (Serial)</option>
+              </select>
+              <small class="help">TCP/IP — tarmoq orqali, Serial — USB/RS232 kabel orqali.</small>
+            </label>
+            <label class="conn-only-tcp">
+              <span>IP</span>
+              <input id="ip" value="192.168.0.250" placeholder="192.168.0.250" />
+            </label>
+            <label class="conn-only-tcp">
+              <span>Port</span>
+              <input id="port" type="number" value="27011" />
+            </label>
+            <label class="conn-only-serial">
+              <span>USB/RS232 qurilma</span>
+              <input id="serialDevice" list="serialDeviceList" placeholder="/dev/ttyUSB0" />
+              <datalist id="serialDeviceList"></datalist>
+              <small class="help">Masalan: <code>/dev/ttyUSB0</code> yoki <code>/dev/serial/by-id/...</code></small>
+            </label>
+            <label class="conn-only-serial">
+              <span>Baud (tezlik)</span>
+              <input id="serialBaud" type="number" value="57600" min="0" step="1" />
+              <small class="help">
+                Ko‘p qurilmalarda 57600 yoki 115200. <b>0</b> kiritsangiz — avtomatik sinab ko‘radi.
+              </small>
+            </label>
+            <label>
+              <span>Antenna portlar soni (UI)</span>
+              <select id="readerType">
+                <option value="4">4 antenna</option>
+                <option value="8">8 antenna</option>
+                <option value="16" selected>16 antenna</option>
+              </select>
+              <small class="help">Qurilmadagi antenna soni (4/8/16).</small>
+            </label>
+            <label>
+              <span>SDK debug log</span>
+              <select id="logSwitch">
+                <option value="0" selected>O‘chiq</option>
+                <option value="1">Yoqiq</option>
+              </select>
+              <small class="help">Faqat diagnostika uchun yoqing.</small>
+            </label>
+          </div>
+          <div class="actions">
+            <button id="btnConnect" class="primary">Ulanish</button>
+            <button id="btnScan" class="ghost">Qidirish</button>
+            <button id="btnDisconnect" class="ghost">Uzish</button>
+          </div>
+          <label class="checkline">
+            <input id="autoConnect" type="checkbox" />
+            <span>Sahifa ochilganda avtomatik ulanish (shu kompyuterda)</span>
+          </label>
+          <div class="hint">
+            Maslahat: xavfsizlik uchun bu veb sahifani <code>127.0.0.1</code> da ishlating. Ulanish turi:
+            <b>TCP/IP (LAN)</b> yoki <b>USB/RS232 (Serial)</b>. USB ishlamasa, Linux’da serial ruxsatini tekshiring
+            (<code>dialout</code> guruhi).
+          </div>
+        </div>
+
+        <div class="panel">
+          <h3>Qurilma ma’lumoti</h3>
+          <div class="grid">
+            <label>
+              <span>Firmware</span>
+              <input id="infoFirmware" readonly placeholder="Ulaning va “Ma’lumot” bosing" />
+            </label>
+            <label>
+              <span>Device ID</span>
+              <input id="infoDeviceId" readonly />
+            </label>
+            <label>
+              <span>Reader type</span>
+              <input id="infoReaderType" readonly />
+            </label>
+          </div>
+          <div class="actions">
+            <button id="btnInfo" class="ghost">Ma’lumot (Get info)</button>
+          </div>
+
+          <h3 class="panel-title">Tez sozlamalar</h3>
+          <div class="grid">
+            <label>
+              <span>RF quvvat (dBm)</span>
+              <input id="power" type="number" value="30" min="0" max="33" />
+              <small class="help">Ko‘p qurilmalarda 0–33 dBm. Odatda 30–33 ishlatiladi.</small>
+            </label>
+            <label>
+              <span>Beep</span>
+              <select id="beepEnabled">
+                <option value="1" selected>Open (yoqilgan)</option>
+                <option value="0">Close (o‘chiq)</option>
+              </select>
+            </label>
+            <label>
+              <span>DRM</span>
+              <select id="drmEnabled">
+                <option value="0" selected>Disable</option>
+                <option value="1">Enable</option>
+              </select>
+              <small class="help">Agar taglar “qiyin” o‘qilsa, DRM’ni yoqib ko‘ring.</small>
+            </label>
+          </div>
+          <div class="actions">
+            <button id="btnSetPower" class="primary">Quvvatni sozlash</button>
+            <button id="btnSetBeep" class="ghost">Beep sozlash</button>
+            <button id="btnSetDrm" class="ghost">DRM sozlash</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="basic-layout">
+        <div class="panel">
+          <h3>Region / Chastota (frequency)</h3>
+          <div class="band-radios" id="bandRadios">
+            <label>
+              <input type="radio" name="bandRadio" value="1" />
+              <span>Chinese band1</span>
+            </label>
+            <label>
+              <input type="radio" name="bandRadio" value="2" checked />
+              <span>US band</span>
+            </label>
+            <label>
+              <input type="radio" name="bandRadio" value="3" />
+              <span>Korean band</span>
+            </label>
+            <label>
+              <input type="radio" name="bandRadio" value="4" />
+              <span>EU band</span>
+            </label>
+            <label>
+              <input type="radio" name="bandRadio" value="8" />
+              <span>Chinese band2</span>
+            </label>
+            <label>
+              <input type="radio" name="bandRadio" value="12" />
+              <span>US band3</span>
+            </label>
+            <label>
+              <input type="radio" name="bandRadio" value="0" />
+              <span>ALL band</span>
+            </label>
+          </div>
+
+          <div class="grid" style="margin-top: 10px">
+            <label>
+              <span>Min frek.</span>
+              <select id="minfre"></select>
+            </label>
+            <label>
+              <span>Max frek.</span>
+              <select id="maxfre"></select>
+            </label>
+            <label class="checkline">
+              <input id="sameFre" type="checkbox" />
+              <span>Single (min = max)</span>
+            </label>
+          </div>
+          <div class="actions">
+            <button id="btnSetRegion" class="primary">Regionni sozlash</button>
+          </div>
+          <div class="hint">
+            Eslatma: “Min/Max frek.” ro‘yxatidagi raqamlar — SDK indekslaridir. Odatda <b>Min ≤ Max</b> bo‘lishi
+            kerak.
+          </div>
+        </div>
+
+        <details class="panel">
+          <summary><b>Qo‘shimcha (Advanced)</b></summary>
+          <div class="grid" style="margin-top: 10px">
+            <label>
+              <span>Retry times</span>
+              <select id="retryTimes">
+                <option value="0">0</option>
+                <option value="1">1</option>
+                <option value="2">2</option>
+                <option value="3" selected>3</option>
+                <option value="4">4</option>
+                <option value="5">5</option>
+                <option value="6">6</option>
+                <option value="7">7</option>
+              </select>
+            </label>
+            <label>
+              <span>Antenna detection (CheckAnt)</span>
+              <select id="checkAntEnabled">
+                <option value="1" selected>Enable</option>
+                <option value="0">Disable</option>
+              </select>
+            </label>
+            <label>
+              <span>Relay (byte)</span>
+              <input id="relayValue" type="number" value="0" min="0" max="255" />
+            </label>
+            <label>
+              <span>GPIO qiymat (byte)</span>
+              <input id="gpioValue" type="number" value="0" min="0" max="255" />
+            </label>
+          </div>
+          <div class="actions">
+            <button id="btnRetryGet" class="ghost">Retry (Get)</button>
+            <button id="btnRetrySet" class="ghost">Retry (Set)</button>
+            <button id="btnCheckAntSet" class="ghost">CheckAnt (Set)</button>
+            <button id="btnRelaySet" class="ghost">Relay (Set)</button>
+            <button id="btnGpioGet" class="ghost">GPIO o‘qish</button>
+            <button id="btnGpioSet" class="ghost">GPIO yozish</button>
+          </div>
+        </details>
+      </div>
+
+      <pre class="output" id="basicOut"></pre>
+    </section>
+
+    <section class="card module hidden" data-main="reader" data-sub="rtSetting">
+      <h2>Real-time-inventory setting</h2>
+      <div class="hint">
+        Bu sozlamalar endi <b>EPCC1-G2 → Real-time-inventory</b> ichiga ko‘chirildi (hammasi bitta joyda, ancha
+        qulay).
+      </div>
+      <div class="actions">
+        <button id="btnGotoRealtime" class="primary">EPCC1-G2 → Real-time-inventory</button>
+      </div>
+    </section>
+
+    <section class="card module hidden" data-main="reader" data-sub="addFunction">
+      <h2>Add-Function</h2>
+      <div class="hint">Bu bo‘lim keyin qo‘shiladi (qo‘shimcha funksiyalar).</div>
+    </section>
+
+    <section class="card module hidden" data-main="c1g2" data-sub="realtime">
+      <h2>Real-time-inventory</h2>
+
+      <div class="c1g2-top">
+	        <div class="panel">
+	          <h3>Skan boshqaruvi</h3>
+	          <div class="actions">
+	            <button id="btnInvStart" class="primary">Boshlash</button>
+	            <button id="btnInvOnce" class="ghost" type="button">Bir marta o‘qish</button>
+	            <button id="btnInvStop" class="ghost">To‘xtatish</button>
+	            <button id="btnInvClear" class="ghost">Tozalash</button>
+	            <button id="btnBeepToggle" class="ghost" type="button">Tovush: o‘chirish</button>
+	          </div>
+	          <label class="checkline">
+	            <input id="invAutoClear" type="checkbox" checked />
+	            <span>Boshlashdan oldin jadvalni avtomatik tozalash</span>
+	          </label>
+	          <label class="checkline">
+	            <input id="invNoRepeat" type="checkbox" />
+	            <span>Faqat yangi taglar (repeat yo‘q)</span>
+	          </label>
+
+          <h3 class="panel-title">Answer mode (o‘qish turi)</h3>
+          <div class="mode-radios" id="invTypeRadios">
+            <label>
+              <input type="radio" name="invType" value="0" checked />
+              <span>EPC</span>
+            </label>
+            <label>
+              <input type="radio" name="invType" value="1" />
+              <span>TID</span>
+            </label>
+            <label>
+              <input type="radio" name="invType" value="2" />
+              <span>Mix (EPC + qo‘shimcha)</span>
+            </label>
+          </div>
+
+          <div class="grid" style="margin-top: 10px">
+            <label class="inv-mix-only">
+              <span>Mix: Mem</span>
+              <select id="invMem">
+                <option value="1" selected>EPC</option>
+                <option value="2">TID</option>
+                <option value="3">User</option>
+              </select>
+            </label>
+            <label class="inv-mix-only">
+              <span>Mix: Password (8 hex)</span>
+              <input id="invPwd" value="00000000" />
+            </label>
+            <label>
+              <span>Addr (word ptr)</span>
+              <input id="tidPtr" type="number" value="0" min="0" max="255" />
+              <small class="help">TID/Mix uchun boshlang‘ich word. EPC uchun odatda 0.</small>
+            </label>
+            <label>
+              <span>Len (word)</span>
+              <input id="tidLen" type="number" value="6" min="0" max="255" />
+              <small class="help">TID/Mix uchun o‘qiladigan word soni. EPC uchun 0 bo‘lishi mumkin.</small>
+            </label>
+          </div>
+        </div>
+
+        <div class="panel">
+          <h3>Inventar sozlamalari</h3>
+          <div class="grid">
+            <label>
+              <span>Q qiymati</span>
+              <select id="qValue">
+                <option value="0">0</option>
+                <option value="1">1</option>
+                <option value="2">2</option>
+                <option value="3">3</option>
+                <option value="4">4</option>
+                <option value="5">5</option>
+                <option value="6" selected>6</option>
+                <option value="7">7</option>
+                <option value="8">8</option>
+                <option value="9">9</option>
+                <option value="10">10</option>
+                <option value="11">11</option>
+                <option value="12">12</option>
+                <option value="13">13</option>
+                <option value="14">14</option>
+                <option value="15">15</option>
+              </select>
+            </label>
+            <label>
+              <span>Session</span>
+              <select id="session">
+                <option value="0">0</option>
+                <option value="1">1</option>
+                <option value="2">2</option>
+                <option value="3">3</option>
+                <option value="255" selected>AUTO (255)</option>
+                <option value="254">AUTO-2 (254)</option>
+                <option value="253">AUTO-3 (253)</option>
+              </select>
+            </label>
+            <label>
+              <span>Target</span>
+              <select id="invTarget">
+                <option value="0" selected>A</option>
+                <option value="1">B</option>
+              </select>
+            </label>
+            <label>
+              <span>Skan vaqti (x100ms)</span>
+              <input id="scanTime" type="number" value="20" min="1" max="255" />
+              <small class="help">20 = 2 soniya. Kattaroq qilsangiz ko‘proq o‘qiydi.</small>
+            </label>
+            <label>
+              <span>“No tag”dan so‘ng A/B almashtirish (count)</span>
+              <input id="invRetryCount" type="number" value="5" min="0" max="255" />
+              <small class="help">Windows’dagi “times no tag A/B conversion”.</small>
+            </label>
+            <label class="checkline" style="margin-top: 26px">
+              <input id="invShowPhase" type="checkbox" checked />
+              <span>Phase/Freq ustunlarini ko‘rsatish</span>
+            </label>
+          </div>
+
+          <div class="actions">
+            <button id="btnInvApply" class="primary">Parametrlarni qo‘llash</button>
+            <button id="btnAntScan" class="ghost" type="button" title="ReturnLoss (dB) bo‘yicha antennalarni tekshiradi">
+              Antennalarni skan qilish
+            </button>
+          </div>
+
+          <div class="grid" style="margin-top: 10px">
+            <label>
+              <span>Antenna maskasi (bit)</span>
+              <input id="antennaMask" type="number" value="1" />
+              <small class="help">ANT1=1, ANT2=2, ANT3=4, ...</small>
+            </label>
+          </div>
+
+          <div class="antenna-picker">
+            <div class="antenna-title">Antennalar</div>
+            <div class="antenna-choices" id="antennaChoices"></div>
+            <div class="hint">Antennani belgilasangiz, maska avtomatik yangilanadi.</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="c1g2-main">
+<div class="panel">
+          <h3>Tag list (No Repeat)</h3>
+          <div class="grid">
+            <label>
+              <span>Filter (EPC)</span>
+              <input id="tagFilter" placeholder="E200..." />
+            </label>
+            <label>
+              <span>CSV eksport</span>
+              <button id="btnTagsExport" class="ghost">CSV yuklab olish</button>
+              <small class="help">Tag jadvalidagi ma’lumotlarni CSV qilib saqlaydi.</small>
+            </label>
+          </div>
+
+          <div class="table-wrap">
+            <table id="tagTableTable" class="tag-table show-phase">
+              <thead>
+                <tr>
+                  <th>No.</th>
+                  <th>EPC</th>
+                  <th>MEM</th>
+                  <th>Count</th>
+                  <th>RSSI</th>
+                  <th class="col-phase">Phase_begin</th>
+                  <th class="col-phase">Phase_end</th>
+                  <th>ANT</th>
+                  <th class="col-phase">Freq(kHz)</th>
+                  <th>Oxirgi ko‘rindi</th>
+                </tr>
+              </thead>
+              <tbody id="tagTable"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="panel">
+          <h3>Hisoblagichlar</h3>
+          <div class="digit-grid-large">
+            <div class="digit-card">
+              <div class="digit-label">EPC Number (unique)</div>
+              <div class="digit" id="statUnique">0</div>
+            </div>
+
+<div class="panel">
+          <h3>Tag list (No Repeat)</h3>
+          <div class="grid">
+            <label>
+              <span>Filter (EPC)</span>
+              <input id="tagFilter" placeholder="E200..." />
+            </label>
+            <label>
+              <span>CSV eksport</span>
+              <button id="btnTagsExport" class="ghost">CSV yuklab olish</button>
+              <small class="help">Tag jadvalidagi ma’lumotlarni CSV qilib saqlaydi.</small>
+            </label>
+          </div>
+
+          <div class="table-wrap">
+            <table id="tagTableTable" class="tag-table show-phase">
+              <thead>
+                <tr>
+                  <th>No.</th>
+                  <th>EPC</th>
+                  <th>MEM</th>
+                  <th>Count</th>
+                  <th>RSSI</th>
+                  <th class="col-phase">Phase_begin</th>
+                  <th class="col-phase">Phase_end</th>
+                  <th>ANT</th>
+                  <th class="col-phase">Freq(kHz)</th>
+                  <th>Oxirgi ko‘rindi</th>
+                </tr>
+              </thead>
+              <tbody id="tagTable"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+	    </section>
+
+	    <section class="card module hidden" data-main="c1g2" data-sub="tags">
+	      <h2>Taglar / Antenna</h2>
+
+	      <div class="panel">
+	        <h3>Tartiblash va filtrlash</h3>
+	        <div class="grid">
+	          <label>
+	            <span>Ko‘rinish</span>
+	            <select id="tagViewMode">
+	              <option value="epc" selected>EPC (bitta tag)</option>
+	              <option value="epc_ant">EPC + Antenna (ajratib)</option>
+	            </select>
+	            <small class="help">Agar tag bir nechta antennada ko‘rinsa, “EPC+ANT” rejimi juda qulay.</small>
+	          </label>
+
+	          <label>
+	            <span>Saralash</span>
+	            <select id="tagViewSort">
+	              <option value="last" selected>Oxirgi ko‘rindi (desc)</option>
+	              <option value="count">Count (desc)</option>
+	              <option value="epc">EPC (A→Z)</option>
+	            </select>
+	          </label>
+
+	          <label>
+	            <span>Antenna filtri</span>
+	            <select id="tagViewAnt">
+	              <option value="0" selected>Barchasi</option>
+	            </select>
+	          </label>
+
+	          <label>
+	            <span>Filter (EPC/MEM)</span>
+	            <input id="tagViewFilter" placeholder="E200..." />
+	            <small class="help">HEX filter: EPC yoki MEM bo‘yicha qidiradi.</small>
+	          </label>
+	        </div>
+
+	        <div class="actions">
+	          <button id="btnTagViewClear" class="ghost" type="button">Tozalash</button>
+	          <button id="btnTagViewExport" class="ghost" type="button">CSV eksport</button>
+	        </div>
+
+	        <div class="hint" id="tagViewHint"></div>
+	      </div>
+
+	      <div class="panel">
+	        <h3>Antenna bo‘yicha statistika</h3>
+	        <div class="digit-grid digit-grid-large" id="antStatsGrid"></div>
+	        <div class="hint">Antenna kartasini bossangiz, filter shu antennaga o‘tadi.</div>
+	      </div>
+
+	      <div class="panel">
+	        <h3>Taglar (yig‘ilgan)</h3>
+	        <div class="table-wrap">
+	          <table id="tagViewTable" class="tag-table">
+	            <thead>
+	              <tr>
+	                <th style="width: 44px">#</th>
+	                <th>EPC</th>
+	                <th>MEM</th>
+	                <th style="width: 90px">Count</th>
+	                <th style="width: 80px">RSSI</th>
+	                <th>ANT</th>
+	                <th style="width: 120px">Oxirgi ko‘rindi</th>
+	              </tr>
+	            </thead>
+	            <tbody id="tagViewBody"></tbody>
+	          </table>
+	        </div>
+	      </div>
+	    </section>
+
+	    <section class="card module hidden" data-main="c1g2" data-sub="antenna">
+	      <h2>Antenna bo‘yicha (hisobot)</h2>
+
+	      <div class="panel">
+	        <h3>Antenna ro‘yxati</h3>
+	        <div class="hint">
+	          Bu bo‘lim har bir antennaning nechta tag ko‘rganini va qaysi EPC’larni ko‘rganini ajratib ko‘rsatadi.
+	        </div>
+
+	        <div class="table-wrap">
+	          <table class="tag-table">
+	            <thead>
+	              <tr>
+	                <th style="width: 44px">#</th>
+	                <th style="width: 80px">ANT</th>
+	                <th style="width: 120px">Unique taglar</th>
+	                <th style="width: 120px">O‘qishlar (count)</th>
+	              </tr>
+	            </thead>
+	            <tbody id="antSummaryBody"></tbody>
+	          </table>
+	        </div>
+	      </div>
+
+	      <div class="panel">
+	        <h3 id="antDetailTitle">ANT — taglar</h3>
+	        <div class="grid">
+	          <label>
+	            <span>Antenna</span>
+	            <select id="antReportAnt"></select>
+	          </label>
+
+	          <label>
+	            <span>Saralash</span>
+	            <select id="antReportSort">
+	              <option value="count" selected>Count (desc)</option>
+	              <option value="last">Oxirgi ko‘rindi (desc)</option>
+	              <option value="epc">EPC (A→Z)</option>
+	            </select>
+	          </label>
+
+	          <label>
+	            <span>Filter (EPC/MEM)</span>
+	            <input id="antReportFilter" placeholder="E200..." />
+	          </label>
+
+	          <label>
+	            <span>CSV</span>
+	            <button id="btnAntReportExport" class="ghost" type="button">CSV eksport</button>
+	            <small class="help">Tanlangan antennaga tegishli EPC ro‘yxatini CSV qiladi.</small>
+	          </label>
+	        </div>
+
+	        <div class="hint" id="antReportHint"></div>
+
+	        <div class="table-wrap">
+	          <table class="tag-table">
+	            <thead>
+	              <tr>
+	                <th style="width: 44px">#</th>
+	                <th>EPC</th>
+	                <th>MEM</th>
+	                <th style="width: 90px">Count</th>
+	                <th style="width: 80px">RSSI</th>
+	                <th style="width: 120px">Oxirgi ko‘rindi</th>
+	              </tr>
+	            </thead>
+	            <tbody id="antDetailBody"></tbody>
+	          </table>
+	        </div>
+	      </div>
+	    </section>
+
+	    <section class="card module hidden" data-main="c1g2" data-sub="buffer">
+	      <h2>Buffer operation</h2>
+	      <div class="panel">
+	        <h3>Holat</h3>
+        <div class="hint">
+          Bu bo‘lim Windows demo’dagi <b>Buffer operation</b> ga o‘xshaydi. Hozirgi Linux SDK (`CReader_Uhf.jar`)
+          ichida buffer rejimiga kerak bo‘ladigan yuqori darajadagi metodlar yo‘q, shuning uchun bu bo‘lim hozircha
+          “demo” ko‘rinishda.
+        </div>
+        <div class="actions">
+          <button class="primary" type="button" id="btnGotoRealtime2">Real-time-inventory ga o‘tish</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="card module hidden" data-main="c1g2" data-sub="fast">
+      <h2>Fast-mode</h2>
+      <div class="panel">
+        <h3>Holat</h3>
+        <div class="hint">
+          Fast-mode (tez skan) uchun ham Windows demo’da alohida buyruqlar ishlatiladi. Bizning web versiyada
+          hozircha <b>Real-time-inventory</b> orqali tez ishlash uchun Q/Session/ScanTime/Target va antennalarni
+          sozlab ishlatish tavsiya etiladi.
+        </div>
+        <div class="actions">
+          <button class="primary" type="button" id="btnGotoRealtime3">Real-time-inventory ga o‘tish</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="card module hidden" data-main="c1g2" data-sub="rw">
+      <h2>Read/Write Tag (O‘qish / Yozish)</h2>
+      <div class="basic-layout">
+        <div class="panel">
+          <h3>Kirish ma’lumotlari</h3>
+          <div class="grid">
+            <label>
+              <span>Maqsad EPC (hex)</span>
+              <input id="rwEpc" placeholder="E200..." />
+              <small class="help">Tag jadvalidan biror qatorni bossangiz, EPC shu yerga tushadi.</small>
+            </label>
+            <label>
+              <span>Xotira banki</span>
+              <select id="rwMem">
+                <option value="0">Password (rezerv)</option>
+                <option value="1">EPC</option>
+                <option value="2">TID</option>
+                <option value="3" selected>User</option>
+              </select>
+              <small class="help">Odatda o‘qish/yozish uchun <b>User</b> tavsiya etiladi.</small>
+            </label>
+            <label>
+              <span>Word Ptr (boshlanish)</span>
+              <input id="rwWordPtr" type="number" value="0" min="0" max="255" />
+              <small class="help">1 word = 2 byte = 4 ta hex belgi.</small>
+            </label>
+            <label>
+              <span>O‘qiladigan word soni</span>
+              <input id="rwNum" type="number" value="2" min="1" max="32" />
+              <small class="help">Masalan 2 word = 4 byte.</small>
+            </label>
+            <label>
+              <span>Access parol (8 hex)</span>
+              <input id="rwPwd" value="00000000" />
+              <small class="help">Agar tag paroli o‘zgargan bo‘lsa, shu yerga to‘g‘ri parolni kiriting.</small>
+            </label>
+            <label>
+              <span>Yoziladigan data (hex)</span>
+              <textarea id="rwData" rows="2" placeholder="Masalan: 11223344 (bu misol)" spellcheck="false"></textarea>
+              <small class="help">Uzunligi 4 ga karrali bo‘lsin (har word uchun 4 hex).</small>
+            </label>
+          </div>
+          <div class="actions">
+            <button id="btnRead" class="primary">O‘qish</button>
+            <button id="btnWrite" class="danger">Yozish</button>
+            <button id="btnPresetEpc" class="ghost">Tez: EPC o‘qish</button>
+            <button id="btnPresetTid" class="ghost">Tez: TID o‘qish</button>
+            <button id="btnPresetUser" class="ghost">Tez: User o‘qish</button>
+          </div>
+          <label class="checkline">
+            <input id="rwAutoStopInv" type="checkbox" checked />
+            <span>O‘qish/yozishdan oldin skanni avtomatik to‘xtatish</span>
+          </label>
+        </div>
+
+        <div class="panel">
+          <h3>Natija / yordam</h3>
+          <div class="hint rw-meta" id="rwMeta"></div>
+          <details class="hint rw-help">
+            <summary><b>O‘qish/yozish bo‘yicha qisqa yordam</b></summary>
+            <ul class="help-list">
+              <li>Avval <b>Ulanish</b> qiling, so‘ng <b>Boshlash</b> (skan) orqali taglarni ko‘ring.</li>
+              <li>Tag jadvalidan qatorni bosing — EPC avtomatik to‘ladi.</li>
+              <li>Ko‘p qurilmalarda R/W ishlashi uchun skan <b>to‘xtagan</b> bo‘lishi kerak.</li>
+              <li><b>EPC bank</b> uchun odatda EPC <b>Word Ptr=2</b> dan boshlanadi (0=CRC, 1=PC).</li>
+              <li><b>TID bank</b> uchun odatda <b>Word Ptr=0</b>, 6–12 word yetadi.</li>
+              <li><b>User bank</b> — o‘zingizning datangiz uchun eng xavfsiz joy.</li>
+              <li><b>Yozish</b> xavfli: EPC/Password ga noto‘g‘ri yozsangiz tag ishlamay qolishi mumkin.</li>
+            </ul>
+          </details>
+          <pre class="output" id="rwOut"></pre>
+        </div>
+      </div>
+    </section>
+
+    <section class="card module hidden" data-main="gjb" data-sub="main">
+      <h2>GJB test</h2>
+      <div class="hint">Hozircha web versiyada mavjud emas.</div>
+    </section>
+
+    <section class="card module hidden" data-main="iso6b" data-sub="main">
+      <h2>18000-6B</h2>
+      <div class="hint">Hozircha web versiyada mavjud emas.</div>
+    </section>
+
+    <section class="card module hidden" data-main="net" data-sub="tcp">
+      <h2>TCP config</h2>
+      <div class="hint">Hozircha web versiyada mavjud emas.</div>
+    </section>
+
+    <section class="card module hidden" data-main="net" data-sub="tcpnl">
+      <h2>TCP config-NL</h2>
+      <div class="hint">Hozircha web versiyada mavjud emas.</div>
+    </section>
+
+    <section class="card module hidden" data-main="net" data-sub="serial">
+      <h2>Serialport Config</h2>
+      <div class="hint">Hozircha web versiyada mavjud emas.</div>
+    </section>
+
+    <section class="card module hidden" data-main="net" data-sub="server">
+      <h2>TCP Server</h2>
+      <div class="hint">Hozircha web versiyada mavjud emas.</div>
+    </section>
+
+    <section class="card module hidden" data-main="net" data-sub="client">
+      <h2>TCP Client</h2>
+      <div class="hint">Hozircha web versiyada mavjud emas.</div>
+    </section>
+
+    <section class="card module hidden" data-main="aloqa" data-sub="main">
+      <h2>Aloqa (ERPNext integratsiya)</h2>
+
+      <div class="panel">
+        <h3>ERP domen va token</h3>
+
+        <div class="grid">
+          <label>
+            <span>ERP URL (domen)</span>
+            <input id="erpUrl" placeholder="https://erp.domain.uz" />
+            <small class="help">
+              Masalan: <code>https://erp.domain.uz</code> yoki local test uchun <code>http://127.0.0.1:8000</code>
+            </small>
+          </label>
+
+          <label>
+            <span>Authorization (token)</span>
+            <input id="erpAuth" type="password" placeholder="token api_key:api_secret" />
+            <small class="help">
+              ERP’da <code>/app/rfidenter-settings</code> sahifasidan token oling. Bu yerga paste qiling.
+            </small>
+          </label>
+
+          <label>
+            <span>Device (nom)</span>
+            <input id="erpDevice" placeholder="my-reader-pc" />
+            <small class="help">ERP’da taglar shu “device” nomi bilan ko‘rinadi.</small>
+          </label>
+
+          <label>
+            <span>Agent ID</span>
+            <input id="erpAgentId" placeholder="my-reader-pc" />
+            <small class="help">Remote UI uchun agent identifikatori (odatda device bilan bir xil).</small>
+          </label>
+        </div>
+
+        <label class="checkline">
+          <input id="erpPushEnabled" type="checkbox" checked />
+          <span>Taglarni ERP’ga yuborish (push)</span>
+        </label>
+
+        <label class="checkline">
+          <input id="erpRpcEnabled" type="checkbox" checked />
+          <span>Remote boshqaruv (ERP’dan reader’ni boshqarish)</span>
+        </label>
+
+        <div class="actions">
+          <button id="btnErpSave" class="primary">Saqlash</button>
+          <button id="btnErpTest" class="ghost">Test</button>
+          <button id="btnErpCopy" class="ghost">Copy env</button>
+          <button id="btnErpClear" class="ghost">Tokenni o‘chirish</button>
+        </div>
+
+        <div class="hint" id="erpConfigHint"></div>
+        <pre class="output" id="erpOut"></pre>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Operation records</h2>
+      <div class="actions">
+        <button id="btnLogsClear" class="ghost">Loglarni tozalash</button>
+        <button id="btnLogsCopy" class="ghost">Loglarni nusxalash</button>
+      </div>
+      <pre class="logs" id="logs"></pre>
+    </section>
+  </main>
+
+  <div class="toasts" id="toasts" aria-live="polite" aria-relevant="additions"></div>
+
+  <script src="./app.js"></script>
+</body>
+
+</html>
