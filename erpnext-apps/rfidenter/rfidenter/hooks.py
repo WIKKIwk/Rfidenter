@@ -2,10 +2,10 @@ app_name = "rfidenter"
 app_title = "RFIDenter"
 app_publisher = "wikki"
 app_description = "RFID reader realtime integration"
-app_icon = "octicon octicon-rss"
+app_icon = "scan"
 app_color = "#111111"
 app_email = "wikki@example.com"
-app_license = "mit"
+app_license = "MIT"
 app_logo_url = "/assets/rfidenter/rfidenter-logo.svg"
 
 # Apps

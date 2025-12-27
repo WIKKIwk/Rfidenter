@@ -37,10 +37,6 @@ frappe.pages["rfidenter-settings"].on_page_load = function (wrapper) {
 
 	const $body = $(`
 		<div class="rfidenter-settings">
-			<div class="alert alert-info" style="margin-bottom: 12px">
-				<b>Sozlamalar</b>: lokal kompyuterdagi Node RFID agent (reader ulangan) taglarni ushbu ERPNext serverga yuboradi.
-			</div>
-
 			<div class="panel panel-default">
 				<div class="panel-heading"><b>Server / Token</b></div>
 				<div class="panel-body">

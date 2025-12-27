@@ -31,10 +31,6 @@ frappe.pages["rfidenter-auth"].on_page_load = function (wrapper) {
 
 	const $body = $(`
 		<div class="rfidenter-auth">
-			<div class="alert alert-info" style="margin-bottom: 12px">
-				<b>Authentication (token)</b>: lokal kompyuterdagi Node RFID agent ushbu ERP’ga taglarni yuborishi uchun user token kerak.
-			</div>
-
 			<div class="panel panel-default">
 				<div class="panel-heading"><b>Token</b></div>
 				<div class="panel-body">
@@ -58,10 +54,6 @@ frappe.pages["rfidenter-auth"].on_page_load = function (wrapper) {
 						<pre class="rfidenter-env" style="white-space: pre-wrap"></pre>
 					</div>
 				</div>
-			</div>
-
-			<div class="alert alert-warning" style="margin-top: 12px">
-				<b>Eslatma</b>: ERP serverda bo‘lsa, reader USB/Serial faqat local kompyuterda ko‘rinadi. Node agent har bir kompyuterda ishlaydi va ERP’ga internet orqali yuboradi.
 			</div>
 		</div>
 	`);
@@ -109,4 +101,3 @@ frappe.pages["rfidenter-auth"].on_page_load = function (wrapper) {
 
 	renderToken(null);
 };
-

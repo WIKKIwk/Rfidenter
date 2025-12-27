@@ -101,4 +101,4 @@ Pre-commit is configured to use the following tools for checking and formatting 
 
 ### License
 
-mit
+MIT
