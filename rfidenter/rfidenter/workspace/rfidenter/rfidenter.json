@@ -1,0 +1,49 @@
+{
+ "charts": [],
+ "content": "[{\"id\":\"rfidenter_header\",\"type\":\"header\",\"data\":{\"text\":\"<span class=\\\"h4\\\"><b>RFIDenter</b></span>\",\"col\":12}},{\"id\":\"rfidenter_desc\",\"type\":\"header\",\"data\":{\"text\":\"<span class=\\\"text-muted\\\">UHF reader taglarini ERP ichida ko‘rsatish (unique EPC+ANT).</span>\",\"col\":12}},{\"id\":\"rfidenter_spacer\",\"type\":\"spacer\",\"data\":{\"col\":12}},{\"id\":\"rfidenter_modules\",\"type\":\"header\",\"data\":{\"text\":\"<span class=\\\"h5\\\"><b>Bo‘limlar</b></span>\",\"col\":12}},{\"id\":\"rfidenter_sc_settings\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Sozlamalar\",\"col\":4}},{\"id\":\"rfidenter_sc_auth\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Autentifikatsiya (Token)\",\"col\":4}},{\"id\":\"rfidenter_sc_read\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"O‘qish (Read)\",\"col\":4}},{\"id\":\"rfidenter_hint\",\"type\":\"header\",\"data\":{\"text\":\"<div class=\\\"text-muted\\\">1) <a href=\\\"/app/rfidenter-auth\\\">Autentifikatsiya</a> dan token oling. 2) Lokal kompyuterda Node agentni ishga tushiring. 3) <a href=\\\"/app/rfidenter-antenna\\\">O‘qish</a> sahifasida unique ro‘yxat ko‘rinadi.</div>\",\"col\":12}}]",
+ "custom_blocks": [],
+ "docstatus": 0,
+ "doctype": "Workspace",
+ "for_user": "",
+ "hide_custom": 0,
+ "icon": "scan",
+ "idx": 0,
+ "indicator_color": "",
+ "is_hidden": 0,
+ "label": "RFIDenter",
+ "links": [],
+ "module": "",
+ "name": "RFIDenter",
+ "number_cards": [],
+ "parent_page": "",
+ "public": 1,
+ "quick_lists": [],
+ "restrict_to_domain": "",
+ "roles": [
+  {
+   "role": "RFIDer"
+  },
+  {
+   "role": "System Manager"
+  }
+ ],
+ "sequence_id": 100.0,
+ "shortcuts": [
+  {
+   "label": "Sozlamalar",
+   "link_to": "rfidenter-settings",
+   "type": "Page"
+  },
+  {
+   "label": "Autentifikatsiya (Token)",
+   "link_to": "rfidenter-auth",
+   "type": "Page"
+  },
+  {
+   "label": "O‘qish (Read)",
+   "link_to": "rfidenter-antenna",
+   "type": "Page"
+  }
+ ],
+ "title": "RFIDenter"
+}

@@ -1,6 +1,8 @@
 # OS / editor
 .DS_Store
 Thumbs.db
+*.swp
+tags
 
 # Logs / runtime state
 *.log
@@ -10,4 +12,7 @@ Demo/web-localhost/server/local-config.json
 # Python cache
 __pycache__/
 *.pyc
+*.egg-info
 
+# Node
+node_modules
