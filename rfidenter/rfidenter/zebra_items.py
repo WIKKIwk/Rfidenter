@@ -174,32 +174,32 @@ def mark_tag_printed(*, epc: str) -> dict[str, Any]:
 	epc_norm = _normalize_hex(epc)[:128]
 	if not epc_norm:
 		raise frappe.ValidationError("EPC noto‘g‘ri.")
-	if not frappe.db.exists("RFID Zebra Tag", epc_norm):
-		raise frappe.DoesNotExistError("RFID Zebra Tag topilmadi.")
-
-	now = frappe.utils.now_datetime()
-	frappe.db.set_value(
-		"RFID Zebra Tag",
-		epc_norm,
-		{
-			"status": "Printed",
-			"printed_at": now,
-			"last_error": "",
-		},
-		update_modified=True,
-	)
-
-	pr_name = str(frappe.db.get_value("RFID Zebra Tag", epc_norm, "purchase_receipt") or "").strip()
-	pr_created = False
-	pr_error = ""
-
-	if not pr_name:
-		row = frappe.db.get_value(
+	row = (
+		frappe.db.get_value(
 			"RFID Zebra Tag",
 			epc_norm,
-			["item_code", "qty", "uom", "consume_ant_id"],
+			["status", "purchase_receipt", "item_code", "qty", "uom", "consume_ant_id"],
 			as_dict=True,
-		) or {}
+		)
+		or {}
+	)
+	if not row:
+		raise frappe.DoesNotExistError("RFID Zebra Tag topilmadi.")
+
+	status = str(row.get("status") or "").strip()
+	now = frappe.utils.now_datetime()
+
+	update: dict[str, Any] = {"printed_at": now, "last_error": ""}
+	if status not in ("Consumed", "Processing"):
+		update["status"] = "Printed"
+	frappe.db.set_value("RFID Zebra Tag", epc_norm, update, update_modified=True)
+
+	se_name = str(row.get("purchase_receipt") or "").strip()
+	se_created = False
+	se_error = ""
+
+	# If the tag is already being processed/consumed, don't create duplicates.
+	if not se_name and status not in ("Consumed", "Processing"):
 		ant_id = _normalize_ant(row.get("consume_ant_id"))
 
 		prev_user = frappe.session.user
@@ -209,7 +209,7 @@ def mark_tag_printed(*, epc: str) -> dict[str, Any]:
 			prev_user = None
 
 		try:
-			pr_name = _create_stock_entry_draft_for_tag(
+			se_name = _create_stock_entry_draft_for_tag(
 				{"epc": epc_norm, "item_code": row.get("item_code"), "qty": row.get("qty"), "uom": row.get("uom")},
 				ant_id=ant_id,
 				device="zebra-print",
@@ -217,16 +217,16 @@ def mark_tag_printed(*, epc: str) -> dict[str, Any]:
 			frappe.db.set_value(
 				"RFID Zebra Tag",
 				epc_norm,
-				{"purchase_receipt": pr_name, "last_error": ""},
+				{"purchase_receipt": se_name, "last_error": ""},
 				update_modified=True,
 			)
-			pr_created = True
+			se_created = True
 		except Exception as exc:
-			pr_error = str(exc)
+			se_error = str(exc)
 			frappe.db.set_value(
 				"RFID Zebra Tag",
 				epc_norm,
-				{"status": "Error", "last_error": pr_error[:500]},
+				{"status": "Error", "last_error": se_error[:500]},
 				update_modified=True,
 			)
 		finally:
@@ -240,9 +240,9 @@ def mark_tag_printed(*, epc: str) -> dict[str, Any]:
 		"ok": True,
 		"epc": epc_norm,
 		"printed_at": now,
-		"stock_entry": pr_name,
-		"stock_entry_created": pr_created,
-		"stock_entry_error": pr_error,
+		"stock_entry": se_name,
+		"stock_entry_created": se_created,
+		"stock_entry_error": se_error,
 	}
 
 
@@ -466,13 +466,16 @@ def process_tag_reads(tags: list[dict[str, Any]], *, device: str = "") -> dict[s
 				continue
 
 			try:
-				se_name = str(row.get("purchase_receipt") or "").strip()
+				# Re-read after claim to avoid races with print callback (mark_tag_printed).
+				se_name = str(frappe.db.get_value("RFID Zebra Tag", epc, "purchase_receipt") or "").strip()
 				if not se_name:
 					se_name = _create_stock_entry_draft_for_tag(
 						{"epc": epc, "item_code": row.get("item_code"), "qty": row.get("qty"), "uom": row.get("uom")},
 						ant_id=ant_id,
 						device=str(device or "")[:64],
 					)
+					# Persist draft name even if submit fails, to prevent duplicates on retries.
+					frappe.db.set_value("RFID Zebra Tag", epc, {"purchase_receipt": se_name}, update_modified=True)
 
 				_submit_stock_entry(se_name, ant_id=ant_id, device=str(device or "")[:64])
 				frappe.db.set_value(
