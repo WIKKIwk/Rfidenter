@@ -9,6 +9,7 @@ import frappe
 
 from rfidenter.rfidenter.permissions import has_rfidenter_access
 from rfidenter.rfidenter import zebra_items
+from frappe.utils.password import get_decrypted_password
 
 AGENT_CACHE_HASH = "rfidenter_agents"
 AGENT_QUEUE_PREFIX = "rfidenter_agent_queue:"
@@ -520,9 +521,9 @@ def set_tag_note(epc: str, note: str | None = None, device: str | None = None) -
 
 
 @frappe.whitelist()
-def generate_user_token() -> dict[str, Any]:
+def generate_user_token(rotate: Any | None = None) -> dict[str, Any]:
 	"""
-	Generate/rotate API key+secret for the current user.
+	Get (or optionally rotate) API key+secret for the current user.
 
 	Used for configuring the local Node agent:
 	  Authorization: token <api_key>:<api_secret>
@@ -535,12 +536,28 @@ def generate_user_token() -> dict[str, Any]:
 		frappe.throw("Login qiling.", frappe.PermissionError)
 
 	user_doc = frappe.get_doc("User", user)
+
+	rotate_raw = str(rotate or "").strip().lower()
+	should_rotate = rotate_raw in ("1", "true", "yes", "y", "on")
+
+	changed = False
 	if not user_doc.api_key:
 		user_doc.api_key = frappe.generate_hash(length=15)
+		changed = True
 
-	api_secret = frappe.generate_hash(length=15)
-	user_doc.api_secret = api_secret
-	user_doc.save(ignore_permissions=True)
+	api_secret = ""
+	try:
+		api_secret = get_decrypted_password("User", user, "api_secret", raise_exception=False) or ""
+	except Exception:
+		api_secret = ""
+
+	if should_rotate or not api_secret:
+		api_secret = frappe.generate_hash(length=15)
+		user_doc.api_secret = api_secret
+		changed = True
+
+	if changed:
+		user_doc.save(ignore_permissions=True)
 
 	return {
 		"ok": True,
@@ -548,6 +565,7 @@ def generate_user_token() -> dict[str, Any]:
 		"api_key": user_doc.api_key,
 		"api_secret": api_secret,
 		"authorization": f"token {user_doc.api_key}:{api_secret}",
+		"rotated": bool(should_rotate),
 	}
 
 

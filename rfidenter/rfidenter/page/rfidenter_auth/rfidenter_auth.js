@@ -40,10 +40,10 @@ frappe.pages["rfidenter-auth"].on_page_load = function (wrapper) {
 					<div style="margin-bottom: 8px"><span class="text-muted">Ingest endpoint:</span> <code class="rfidenter-endpoint"></code></div>
 
 					<div class="text-muted" style="margin: 10px 0">
-						Token faqat <b>RFIDer</b> roli berilgan user uchun ishlaydi. Secret faqat generatsiya paytida ko‘rinadi.
+						Token faqat <b>RFIDer</b> roli berilgan user uchun ishlaydi. <b>API secret</b> ni hech kimga bermang.
 					</div>
 
-					<button class="btn btn-primary btn-sm rfidenter-generate">Token yaratish / yangilash</button>
+					<button class="btn btn-primary btn-sm rfidenter-generate">Token olish</button>
 					<span class="text-muted rfidenter-gen-status" style="margin-left: 8px"></span>
 
 					<div style="margin-top: 12px">

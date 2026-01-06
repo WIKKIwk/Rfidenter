@@ -27,17 +27,6 @@ function fmtTime(ts) {
 	}
 }
 
-function maskAuth(raw) {
-	const s = String(raw ?? "").trim();
-	if (!s) return "";
-	const token = s.toLowerCase().startsWith("token ") ? s.slice(6).trim() : s;
-	const [key, secret] = token.split(":");
-	if (!key) return "***";
-	const k = key.length <= 6 ? key : `${key.slice(0, 3)}…${key.slice(-2)}`;
-	const sec = secret ? `${"*".repeat(Math.min(6, secret.length))}` : "";
-	return secret ? `token ${k}:${sec}` : `token ${k}`;
-}
-
 function sleep(ms) {
 	return new Promise((resolve) => setTimeout(resolve, Math.max(0, Number(ms) || 0)));
 }
@@ -244,17 +233,58 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 			});
 		}
 
-	const $body = $(`
-		<div class="rfidenter-zebra">
-			<div class="alert alert-info" style="margin-bottom: 12px">
-				<b>Zebra printer</b>: ERP’dan printerga buyruq yuborish 2 xil usulda ishlaydi:
-				<br />
-				<b>Agent</b> (tavsiya): Zebra servisi ERP’ga token bilan ulanadi (brauzer local URL’ga chiqmaydi).
-				<br />
-				<b>Local URL</b>: brauzer to‘g‘ridan-to‘g‘ri Zebra servisiga ulanadi (CORS/mixed-content kerak bo‘lishi mumkin).
-				<br />
-				Token: <a href="/app/rfidenter-auth">Autentifikatsiya (Token)</a> sahifasida generatsiya qiling.
-			</div>
+		const $body = $(`
+			<div class="rfidenter-zebra">
+				<style>
+					.rfidenter-zebra .rfz-topbar {
+						display: flex;
+						align-items: center;
+						justify-content: flex-end;
+						margin-bottom: 12px;
+					}
+					.rfidenter-zebra .rfz-topbar .indicator-pill {
+						font-size: 12px;
+						padding: 4px 10px;
+					}
+					.rfidenter-zebra .rfz-control .help-box,
+					.rfidenter-zebra .rfz-control .help-block,
+					.rfidenter-zebra .rfz-control .control-help {
+						display: none !important;
+					}
+					.rfidenter-zebra .rfz-control .form-group {
+						margin-bottom: 0;
+					}
+					.rfidenter-zebra .rfz-form-row {
+						margin: 0 -8px;
+					}
+					.rfidenter-zebra .rfz-form-row > div {
+						padding: 0 8px;
+					}
+					.rfidenter-zebra .rfz-actions {
+						display: flex;
+						align-items: flex-end;
+						gap: 10px;
+						flex-wrap: wrap;
+					}
+					.rfidenter-zebra .rfz-table {
+						margin-top: 12px;
+						max-height: 320px;
+						overflow: auto;
+					}
+					.rfidenter-zebra details.rfz-advanced > summary {
+						cursor: pointer;
+						user-select: none;
+						color: #6c7680;
+						margin-top: 12px;
+					}
+					.rfidenter-zebra details.rfz-advanced[open] > summary {
+						margin-bottom: 12px;
+					}
+				</style>
+
+				<div class="rfz-topbar">
+					<span class="indicator-pill orange rfidenter-zebra-status">Tekshirilmoqda...</span>
+				</div>
 
 				<div class="panel panel-default">
 					<div class="panel-heading"><b>Ulanish</b></div>
@@ -280,98 +310,94 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 						</div>
 
 						<a class="btn btn-default btn-sm rfidenter-zebra-open" target="_blank" rel="noopener noreferrer">UI</a>
-						<span class="text-muted rfidenter-zebra-status"></span>
-						<span class="text-muted" style="margin-left: auto">Auth: <code class="rfidenter-zebra-auth"></code></span>
 					</div>
 					</div>
 				</div>
 
 				<div class="panel panel-default" style="margin-top: 12px">
-					<div class="panel-heading"><b>Mahsulot → RFID Print → Purchase Receipt</b></div>
+					<div class="panel-heading">
+						<div class="flex" style="align-items:center; justify-content: space-between; gap: 10px; flex-wrap: wrap">
+							<b>Mahsulot → RFID Print → Purchase Receipt</b>
+							<button class="btn btn-default btn-xs rfz-open-settings">Item receipt settings</button>
+						</div>
+					</div>
 					<div class="panel-body">
-						<div class="text-muted" style="margin-bottom: 10px">
-							1) Mahsulot va qty/UOM tanlang. 2) <b>Print</b> — ERP EPC yaratadi va Zebra’ga yuboradi.
-							3) Ushbu EPC tanlangan ANT’da o‘qilsa avtomatik <b>Purchase Receipt</b> yaratiladi.
-							<button class="btn btn-default btn-xs rfz-open-settings" style="margin-left: 8px">Item receipt settings</button>
+						<div class="row rfz-form-row">
+							<div class="col-md-6 rfz-control">
+								<label class="text-muted">Kategoriya (Item Group)</label>
+								<div class="rfz-item-group"></div>
+							</div>
+							<div class="col-md-6 rfz-control">
+								<label class="text-muted">Mahsulot</label>
+								<div class="rfz-item"></div>
+							</div>
 						</div>
 
-						<div class="row" style="margin: 0 -8px">
-							<div class="col-md-4" style="padding: 0 8px">
-								<div class="form-group">
-									<label class="text-muted">Kategoriya (Item Group)</label>
-									<div class="rfz-item-group"></div>
-								</div>
-								<div class="form-group">
-									<label class="text-muted">Mahsulot</label>
-									<div class="rfz-item"></div>
-								</div>
+						<div class="row rfz-form-row" style="margin-top: 10px">
+							<div class="col-md-3 rfz-control">
+								<label class="text-muted">Qty</label>
+								<div class="rfz-qty"></div>
 							</div>
-
-							<div class="col-md-8" style="padding: 0 8px">
-								<div class="flex" style="gap: 12px; align-items: flex-end; flex-wrap: wrap">
-									<div class="form-group" style="margin: 0; min-width: 180px">
-										<label class="text-muted">Qty</label>
-										<div class="rfz-qty"></div>
-									</div>
-									<div class="form-group" style="margin: 0; min-width: 180px">
-										<label class="text-muted">UOM</label>
-										<div class="rfz-uom"></div>
-									</div>
-									<div class="form-group" style="margin: 0; min-width: 180px">
-										<label class="text-muted">Antenna (consume)</label>
-										<div class="rfz-ant"></div>
-									</div>
+							<div class="col-md-3 rfz-control">
+								<label class="text-muted">UOM</label>
+								<div class="rfz-uom"></div>
+							</div>
+							<div class="col-md-3 rfz-control">
+								<label class="text-muted">Antenna (consume)</label>
+								<div class="rfz-ant"></div>
+							</div>
+							<div class="col-md-3">
+								<div class="rfz-actions" style="margin-top: 18px">
 									<button class="btn btn-primary btn-sm rfz-print">Print</button>
 									<span class="text-muted rfz-status"></span>
-									<span class="text-muted rfz-queue" style="margin-left: auto"></span>
-								</div>
-
-								<div class="table-responsive" style="margin-top: 12px; max-height: 240px; overflow: auto">
-									<table class="table table-bordered table-hover">
-										<thead>
-											<tr>
-												<th style="width: 44px">#</th>
-												<th style="width: 260px">EPC</th>
-												<th>Item</th>
-												<th style="width: 90px">Qty</th>
-												<th style="width: 80px">UOM</th>
-												<th style="width: 70px">ANT</th>
-												<th style="width: 120px">Status</th>
-												<th style="width: 160px">Purchase Receipt</th>
-											</tr>
-										</thead>
-										<tbody class="rfz-recent"></tbody>
-									</table>
-								</div>
-								<div class="text-muted" style="font-size: 12px">
-									Offline bo‘lsa, so‘rov localStorage’da navbatga qo‘yiladi va internet qaytganda yuboriladi.
+									<span class="text-muted rfz-queue"></span>
 								</div>
 							</div>
+						</div>
+
+						<div class="rfz-table table-responsive">
+							<table class="table table-bordered table-hover">
+								<thead>
+									<tr>
+										<th style="width: 44px">#</th>
+										<th style="width: 260px">EPC</th>
+										<th>Item</th>
+										<th style="width: 90px">Qty</th>
+										<th style="width: 80px">UOM</th>
+										<th style="width: 70px">ANT</th>
+										<th style="width: 120px">Status</th>
+										<th style="width: 160px">Purchase Receipt</th>
+									</tr>
+								</thead>
+								<tbody class="rfz-recent"></tbody>
+							</table>
 						</div>
 					</div>
 				</div>
 
-				<div class="panel panel-default" style="margin-top: 12px">
-					<div class="panel-heading"><b>Printer</b></div>
-					<div class="panel-body">
-					<div class="text-muted" style="margin-bottom: 8px">Config: <code class="rfidenter-zebra-config"></code></div>
-					<div class="table-responsive">
-						<table class="table table-bordered table-hover">
-							<thead>
-								<tr>
-									<th style="width: 180px">USB</th>
-									<th>Info</th>
-								</tr>
-							</thead>
-							<tbody class="rfidenter-zebra-devices"></tbody>
-						</table>
+				<details class="rfz-advanced">
+					<summary>Qo‘shimcha</summary>
+					<div class="panel panel-default" style="margin-top: 12px">
+						<div class="panel-heading"><b>Printer</b></div>
+						<div class="panel-body">
+							<div class="text-muted" style="margin-bottom: 8px">Config: <code class="rfidenter-zebra-config"></code></div>
+							<div class="table-responsive">
+								<table class="table table-bordered table-hover">
+									<thead>
+										<tr>
+											<th style="width: 180px">USB</th>
+											<th>Info</th>
+										</tr>
+									</thead>
+									<tbody class="rfidenter-zebra-devices"></tbody>
+								</table>
+							</div>
+						</div>
 					</div>
-				</div>
-			</div>
 
-			<div class="panel panel-default" style="margin-top: 12px">
-				<div class="panel-heading"><b>Encode / Print</b></div>
-				<div class="panel-body">
+					<div class="panel panel-default" style="margin-top: 12px">
+						<div class="panel-heading"><b>Encode / Print</b></div>
+						<div class="panel-body">
 					<div class="flex" style="gap: 14px; align-items: center; flex-wrap: wrap; margin-bottom: 12px">
 						<label class="radio-inline" style="margin: 0">
 							<input type="radio" name="rfidenter-zebra-mode" value="manual" checked />
@@ -448,8 +474,9 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 							<textarea class="rfidenter-epc-list" style="position:absolute; left:-9999px; top:-9999px" readonly></textarea>
 						</div>
 					</div>
+					</div>
 				</div>
-			</div>
+				</details>
 		</div>
 	`);
 
@@ -463,7 +490,6 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 	const $url = $body.find(".rfidenter-zebra-url");
 	const $open = $body.find(".rfidenter-zebra-open");
 	const $status = $body.find(".rfidenter-zebra-status");
-	const $auth = $body.find(".rfidenter-zebra-auth");
 	const $cfg = $body.find(".rfidenter-zebra-config");
 	const $devices = $body.find(".rfidenter-zebra-devices");
 	const $modeManual = $body.find(".rfidenter-mode-manual");
@@ -636,13 +662,14 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 
 			const me = itemState;
 
-			me.controls.item_group = frappe.ui.form.make_control({
-				df: {
-					label: "Item Group",
-					fieldtype: "Link",
-					options: "Item Group",
-					placeholder: "Kategoriya",
-					onchange: function () {
+				me.controls.item_group = frappe.ui.form.make_control({
+					df: {
+						label: "Item Group",
+						description: "",
+						fieldtype: "Link",
+						options: "Item Group",
+						placeholder: "Kategoriya",
+						onchange: function () {
 						try {
 							me.controls.item.set_value("");
 						} catch {
@@ -654,13 +681,14 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 				render_input: true,
 			});
 
-			me.controls.item = frappe.ui.form.make_control({
-				df: {
-					label: "Item",
-					fieldtype: "Link",
-					options: "Item",
-					placeholder: "Mahsulot",
-					onchange: function () {
+				me.controls.item = frappe.ui.form.make_control({
+					df: {
+						label: "Item",
+						description: "",
+						fieldtype: "Link",
+						options: "Item",
+						placeholder: "Mahsulot",
+						onchange: function () {
 						resolveItemDefaults(this.value).catch(() => {});
 					},
 					get_query: function () {
@@ -672,23 +700,24 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 				render_input: true,
 			});
 
-			me.controls.qty = frappe.ui.form.make_control({
-				df: { label: "Qty", fieldtype: "Float", placeholder: "1" },
-				parent: $qtyWrap,
-				render_input: true,
-			});
-			me.controls.uom = frappe.ui.form.make_control({
-				df: { label: "UOM", fieldtype: "Link", options: "UOM", placeholder: "kg" },
-				parent: $uomWrap,
-				render_input: true,
-			});
-			me.controls.ant = frappe.ui.form.make_control({
-				df: {
-					label: "ANT",
-					fieldtype: "Select",
-					options: ["0", ...Array.from({ length: 31 }, (_, i) => String(i + 1))].join("\n"),
-					default: "1",
-				},
+				me.controls.qty = frappe.ui.form.make_control({
+					df: { label: "Qty", description: "", fieldtype: "Float", placeholder: "1" },
+					parent: $qtyWrap,
+					render_input: true,
+				});
+				me.controls.uom = frappe.ui.form.make_control({
+					df: { label: "UOM", description: "", fieldtype: "Link", options: "UOM", placeholder: "kg" },
+					parent: $uomWrap,
+					render_input: true,
+				});
+				me.controls.ant = frappe.ui.form.make_control({
+					df: {
+						label: "ANT",
+						description: "",
+						fieldtype: "Select",
+						options: ["0", ...Array.from({ length: 31 }, (_, i) => String(i + 1))].join("\n"),
+						default: "1",
+					},
 				parent: $antWrap,
 				render_input: true,
 			});
@@ -796,25 +825,32 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 
 				if (changed) saveItemQueue(queue);
 				renderItemQueue();
-			} finally {
-				itemState.processing = false;
-			}
+		} finally {
+			itemState.processing = false;
+		}
+	}
+
+		function setStatusPill(text, { indicator = "orange", title = "" } = {}) {
+			const allowed = ["green", "red", "orange", "gray"];
+			$status.removeClass(allowed.join(" "));
+			$status.addClass(allowed.includes(indicator) ? indicator : "orange");
+			$status.text(String(text || ""));
+			if (title) $status.attr("title", String(title));
+			else $status.removeAttr("title");
 		}
 
-	function setConnected(ok, msg) {
-		$status.text(ok ? "Online" : "Offline");
-		$status.css("color", ok ? "#1f7a1f" : "#a33");
-		state.status = { ok: Boolean(ok), message: String(msg || "") };
-	}
+		function setConnected(ok, msg) {
+			const connected = Boolean(ok);
+			setStatusPill(connected ? "Ulangan" : "Ulanmagan", {
+				indicator: connected ? "green" : "red",
+				title: msg || "",
+			});
+			state.status = { ok: connected, message: String(msg || "") };
+		}
 
-	function renderAuth() {
-		const raw = getAuth();
-		$auth.text(raw ? maskAuth(raw) : "(yo‘q)");
-	}
-
-	function updateConnectionUi() {
-		const mode = getConnMode();
-		$connMode.val(mode);
+		function updateConnectionUi() {
+			const mode = getConnMode();
+			$connMode.val(mode);
 		$connAgentWrap.toggle(mode === "agent");
 		$connLocalWrap.toggle(mode === "local");
 	}
@@ -967,7 +1003,7 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 
 	async function refreshAll({ quiet = false } = {}) {
 		updateConnectionUi();
-		renderAuth();
+		setStatusPill("Tekshirilmoqda...", { indicator: "orange" });
 
 		const connMode = getConnMode();
 		if (connMode === "local") {
@@ -976,7 +1012,7 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 			$open.attr("href", `${state.baseUrl}/`);
 
 			try {
-				$status.text("Tekshirilmoqda...");
+				setStatusPill("Tekshirilmoqda...", { indicator: "orange" });
 				const health = await zebraFetch("/api/v1/health", { timeoutMs: 2500 });
 				if (health?.ok !== true) throw new Error("Health not ok");
 				setConnected(true);
@@ -1010,7 +1046,7 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 
 		// Agent mode: ERP orqali (brauzer local zebra URL'ga ulanmaydi)
 		try {
-			$status.text("Agentlar yuklanmoqda...");
+			setStatusPill("Agentlar yuklanmoqda...", { indicator: "orange" });
 			await refreshAgents();
 			renderAgentOptions();
 		} catch (e) {
