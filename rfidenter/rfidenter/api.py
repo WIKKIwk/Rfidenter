@@ -8,6 +8,7 @@ from typing import Any
 import frappe
 
 from rfidenter.rfidenter.permissions import has_rfidenter_access
+from rfidenter.rfidenter import zebra_items
 
 AGENT_CACHE_HASH = "rfidenter_agents"
 AGENT_QUEUE_PREFIX = "rfidenter_agent_queue:"
@@ -298,6 +299,14 @@ def ingest_tags(**kwargs) -> dict[str, Any]:
 		published = False
 		frappe.log_error(title="RFIDenter publish_realtime failed", message=frappe.get_traceback())
 
+	# Zebra item-tags: auto-create Purchase Receipt (best-effort).
+	zebra_processed = 0
+	try:
+		zebra_result = zebra_items.process_tag_reads(agg_tags, device=device)
+		zebra_processed = int(zebra_result.get("processed") or 0) if isinstance(zebra_result, dict) else 0
+	except Exception:
+		zebra_processed = 0
+
 	return {
 		"ok": True,
 		"received": len(tags),
@@ -310,6 +319,7 @@ def ingest_tags(**kwargs) -> dict[str, Any]:
 		"published": published,
 		"saved_updated": saved_updated,
 		"saved_count": saved_count,
+		"zebra_processed": zebra_processed,
 	}
 
 
@@ -844,3 +854,44 @@ def agent_result(request_id: str = "") -> dict[str, Any]:
 		return {"ok": True, "state": "done", "reply": reply}
 
 	return {"ok": True, "state": "pending"}
+
+
+@frappe.whitelist()
+def zebra_create_item_tag(
+	item_code: str,
+	qty: Any | None = None,
+	uom: str | None = None,
+	consume_ant_id: Any | None = None,
+	client_request_id: str | None = None,
+) -> dict[str, Any]:
+	"""Create a Zebra EPC tag record for an Item.
+
+	The UI will then print the EPC using Zebra agent/local URL. This stores the mapping in DB.
+	"""
+	if not has_rfidenter_access():
+		frappe.throw("RFIDenter: sizda RFIDer roli yo‘q.", frappe.PermissionError)
+
+	return zebra_items.create_item_tag(
+		item_code=item_code,
+		qty=qty,
+		uom=uom,
+		consume_ant_id=consume_ant_id,
+		client_request_id=client_request_id,
+		requested_by=frappe.session.user,
+	)
+
+
+@frappe.whitelist()
+def zebra_mark_tag_printed(epc: str) -> dict[str, Any]:
+	"""Mark a Zebra tag as printed (for UI visibility/debug)."""
+	if not has_rfidenter_access():
+		frappe.throw("RFIDenter: sizda RFIDer roli yo‘q.", frappe.PermissionError)
+	return zebra_items.mark_tag_printed(epc=epc)
+
+
+@frappe.whitelist()
+def zebra_list_tags(limit: Any | None = None) -> dict[str, Any]:
+	"""List recent Zebra tags from DB."""
+	if not has_rfidenter_access():
+		frappe.throw("RFIDenter: sizda RFIDer roli yo‘q.", frappe.PermissionError)
+	return zebra_items.list_recent_tags(limit=limit)

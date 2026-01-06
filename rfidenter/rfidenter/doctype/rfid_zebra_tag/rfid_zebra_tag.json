@@ -1,0 +1,159 @@
+{
+ "actions": [],
+ "autoname": "field:epc",
+ "creation": "2026-01-06 00:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "epc",
+  "item_code",
+  "item_name",
+  "qty",
+  "uom",
+  "consume_ant_id",
+  "status",
+  "printed_at",
+  "consumed_at",
+  "purchase_receipt",
+  "client_request_id",
+  "requested_by",
+  "consumed_device",
+  "last_error"
+ ],
+ "fields": [
+  {
+   "fieldname": "epc",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "EPC",
+   "reqd": 1,
+   "unique": 1
+  },
+  {
+   "fieldname": "item_code",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Item",
+   "options": "Item",
+   "reqd": 1
+  },
+  {
+   "fetch_from": "item_code.item_name",
+   "fieldname": "item_name",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Item Name",
+   "read_only": 1
+  },
+  {
+   "default": "1",
+   "fieldname": "qty",
+   "fieldtype": "Float",
+   "in_list_view": 1,
+   "label": "Qty",
+   "reqd": 1
+  },
+  {
+   "fieldname": "uom",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "UOM",
+   "options": "UOM",
+   "reqd": 1
+  },
+  {
+   "default": "0",
+   "description": "0 = any antenna. 1..31 = only that antenna triggers Purchase Receipt.",
+   "fieldname": "consume_ant_id",
+   "fieldtype": "Int",
+   "in_list_view": 1,
+   "label": "Consume ANT"
+  },
+  {
+   "default": "Pending Print",
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Status",
+   "options": "Pending Print\nPrinted\nProcessing\nConsumed\nError"
+  },
+  {
+   "fieldname": "printed_at",
+   "fieldtype": "Datetime",
+   "in_list_view": 1,
+   "label": "Printed At"
+  },
+  {
+   "fieldname": "consumed_at",
+   "fieldtype": "Datetime",
+   "in_list_view": 1,
+   "label": "Consumed At"
+  },
+  {
+   "fieldname": "purchase_receipt",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Purchase Receipt",
+   "options": "Purchase Receipt"
+  },
+  {
+   "fieldname": "client_request_id",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Client Request ID",
+   "unique": 1
+  },
+  {
+   "fieldname": "requested_by",
+   "fieldtype": "Link",
+   "label": "Requested By",
+   "options": "User"
+  },
+  {
+   "fieldname": "consumed_device",
+   "fieldtype": "Data",
+   "label": "Consumed Device"
+  },
+  {
+   "fieldname": "last_error",
+   "fieldtype": "Small Text",
+   "label": "Last Error"
+  }
+ ],
+ "links": [],
+ "modified": "2026-01-06 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "RFIDenter",
+ "name": "RFID Zebra Tag",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "RFIDer",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "track_changes": 1
+}
+

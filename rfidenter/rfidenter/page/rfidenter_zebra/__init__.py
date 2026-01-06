@@ -1,0 +1,2 @@
+"""RFIDenter Zebra page."""
+

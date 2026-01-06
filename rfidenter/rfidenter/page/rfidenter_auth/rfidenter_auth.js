@@ -26,6 +26,8 @@ frappe.pages["rfidenter-auth"].on_page_load = function (wrapper) {
 		single_column: true,
 	});
 
+	const STORAGE_AUTH = "rfidenter.erp_push_auth";
+
 	const origin = normalizeBaseUrl(window.location.origin);
 	const ingestEndpoint = `${origin}/api/method/rfidenter.rfidenter.api.ingest_tags`;
 
@@ -69,6 +71,7 @@ frappe.pages["rfidenter-auth"].on_page_load = function (wrapper) {
 	function renderToken(data) {
 		const auth = String(data?.authorization || "").trim();
 		setCode($auth, auth || "(yo‘q)");
+		if (auth) window.localStorage.setItem(STORAGE_AUTH, auth);
 
 		const snippet = auth
 			? [
@@ -77,6 +80,17 @@ frappe.pages["rfidenter-auth"].on_page_load = function (wrapper) {
 					`# ixtiyoriy: qurilma nomi`,
 					`export ERP_PUSH_DEVICE="my-reader-pc"`,
 					`# keyin Node’ni ishga tushiring (start-web.sh)`,
+					``,
+					`# zebra-epc-web (local Zebra printer service)`,
+					`export ZEBRA_AUTH_TOKEN="${auth}"`,
+					`# zebra-epc-web (agent mode: ERP orqali)`,
+					`export ZEBRA_ERP_URL="${origin}"`,
+					`export ZEBRA_ERP_AUTH="${auth}"`,
+					`# yoki 2 ta ERP (local + server)`,
+					`export ZEBRA_ERP_URL_LOCAL="${origin}"`,
+					`export ZEBRA_ERP_AUTH_LOCAL="${auth}"`,
+					`# export ZEBRA_ERP_URL_SERVER="https://erp.example.com"`,
+					`# export ZEBRA_ERP_AUTH_SERVER="token <api_key>:<api_secret>"`,
 			  ].join("\n")
 			: "";
 		setCode($env, snippet || "(Token yaratilgandan keyin shu yerda chiqadi)");
