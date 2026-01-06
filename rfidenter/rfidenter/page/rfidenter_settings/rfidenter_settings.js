@@ -25,6 +25,16 @@ function fmtTime(ts) {
 	}
 }
 
+function isLoopbackUrl(raw) {
+	try {
+		const u = new URL(String(raw || ""));
+		const host = String(u.hostname || "").trim().toLowerCase();
+		return host === "127.0.0.1" || host === "localhost" || host === "::1";
+	} catch {
+		return false;
+	}
+}
+
 frappe.pages["rfidenter-settings"].on_page_load = function (wrapper) {
 	const page = frappe.ui.make_app_page({
 		parent: wrapper,
@@ -128,7 +138,7 @@ frappe.pages["rfidenter-settings"].on_page_load = function (wrapper) {
 		if (kind === "zebra") return true;
 		const agentId = String(agent?.agent_id || "").trim().toLowerCase();
 		const version = String(agent?.version || "").trim().toLowerCase();
-		return agentId.startsWith("zebra-") || version.includes("zebra");
+		return agentId.startsWith("zebra") || version.includes("zebra");
 	}
 
 	function dotHtml(ok) {
@@ -158,8 +168,50 @@ frappe.pages["rfidenter-settings"].on_page_load = function (wrapper) {
 		}
 	}
 
+	function loopbackZebraAgentBaseUrl(agents) {
+		const list = Array.isArray(agents) ? agents : [];
+		for (const a of list) {
+			if (!isZebraAgent(a)) continue;
+			const urls = Array.isArray(a?.ui_urls) ? a.ui_urls : [];
+			for (const u of urls) {
+				const base = normalizeBaseUrl(u);
+				if (base && isLoopbackUrl(base)) return base;
+			}
+		}
+		return "";
+	}
+
+	async function trySyncZebraUrlFromAgent({ quiet = false } = {}) {
+		const current = getZebraBaseUrl();
+		if (!isLoopbackUrl(current)) return false;
+
+		let agents = state.agents;
+		try {
+			const r = await frappe.call("rfidenter.rfidenter.api.list_agents");
+			const msg = r?.message;
+			if (msg && msg.ok === true) {
+				agents = Array.isArray(msg.agents) ? msg.agents : [];
+				state.agents = agents;
+				state.ttlSec = Number(msg.ttl_sec || 0) || 0;
+			}
+		} catch {
+			// ignore
+		}
+
+		const baseFromAgent = loopbackZebraAgentBaseUrl(agents);
+		if (!baseFromAgent) return false;
+		if (normalizeBaseUrl(baseFromAgent) === normalizeBaseUrl(current)) return false;
+
+		setZebraBaseUrl(baseFromAgent);
+		const next = getZebraBaseUrl();
+		$zebraUrl.val(next);
+		$zebraOpen.attr("href", `${next}/`);
+		if (!quiet) frappe.show_alert({ message: `Zebra URL yangilandi: ${escapeHtml(baseFromAgent)}`, indicator: "orange" });
+		return true;
+	}
+
 	async function refreshZebra({ quiet = false } = {}) {
-		const baseUrl = getZebraBaseUrl();
+		let baseUrl = getZebraBaseUrl();
 		$zebraStatus.text("Tekshirilmoqda...");
 		try {
 			const data = await zebraGet("/api/v1/health");
@@ -168,11 +220,34 @@ frappe.pages["rfidenter-settings"].on_page_load = function (wrapper) {
 			$zebraStatus.text("Online");
 			$zebraOpen.attr("href", `${baseUrl}/`);
 		} catch (e) {
-			state.zebra = { ok: false, message: String(e?.message || e), checkedAt: Date.now() };
-			$zebraStatus.text("Offline");
-			$zebraOpen.attr("href", `${baseUrl}/`);
-			if (!quiet) {
-				frappe.show_alert({ message: `Zebra: ${escapeHtml(e?.message || e)}`, indicator: "orange" });
+			let err = e;
+
+			try {
+				const changed = await trySyncZebraUrlFromAgent({ quiet: true });
+				if (changed) {
+					baseUrl = getZebraBaseUrl();
+					try {
+						const data2 = await zebraGet("/api/v1/health");
+						if (data2?.ok !== true) throw new Error("Zebra health not ok");
+						state.zebra = { ok: true, message: "Online", checkedAt: Date.now() };
+						$zebraStatus.text("Online");
+						$zebraOpen.attr("href", `${baseUrl}/`);
+						err = null;
+					} catch (e2) {
+						err = e2;
+					}
+				}
+			} catch {
+				// ignore
+			}
+
+			if (err) {
+				state.zebra = { ok: false, message: String(err?.message || err), checkedAt: Date.now() };
+				$zebraStatus.text("Offline");
+				$zebraOpen.attr("href", `${baseUrl}/`);
+				if (!quiet) {
+					frappe.show_alert({ message: `Zebra: ${escapeHtml(err?.message || err)}`, indicator: "orange" });
+				}
 			}
 		}
 		renderDevices();

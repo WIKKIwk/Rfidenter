@@ -27,6 +27,16 @@ function fmtTime(ts) {
 	}
 }
 
+function isLoopbackUrl(raw) {
+	try {
+		const u = new URL(String(raw || ""));
+		const host = String(u.hostname || "").trim().toLowerCase();
+		return host === "127.0.0.1" || host === "localhost" || host === "::1";
+	} catch {
+		return false;
+	}
+}
+
 function sleep(ms) {
 	return new Promise((resolve) => setTimeout(resolve, Math.max(0, Number(ms) || 0)));
 }
@@ -68,7 +78,7 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 		if (kind === "zebra") return true;
 		const agentId = String(agent?.agent_id || "").trim().toLowerCase();
 		const version = String(agent?.version || "").trim().toLowerCase();
-		return agentId.startsWith("zebra-") || version.includes("zebra");
+		return agentId.startsWith("zebra") || version.includes("zebra");
 	}
 
 	function getSelectedAgentId() {
@@ -97,6 +107,52 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 	function setBaseUrl(url) {
 		window.localStorage.setItem(STORAGE_ZEBRA_URL, normalizeBaseUrl(url));
 		state.baseUrl = getBaseUrl();
+	}
+
+	function loopbackAgentBaseUrl() {
+		const agents = Array.isArray(state.agents) ? state.agents : [];
+		const selectedId = getSelectedAgentId();
+		if (selectedId) {
+			const selected = agents.find((a) => String(a?.agent_id || "").trim() === selectedId);
+			const urls = Array.isArray(selected?.ui_urls) ? selected.ui_urls : [];
+			for (const u of urls) {
+				const base = normalizeBaseUrl(u);
+				if (base && isLoopbackUrl(base)) return base;
+			}
+		}
+		for (const a of agents) {
+			const urls = Array.isArray(a?.ui_urls) ? a.ui_urls : [];
+			for (const u of urls) {
+				const base = normalizeBaseUrl(u);
+				if (base && isLoopbackUrl(base)) return base;
+			}
+		}
+		return "";
+	}
+
+	async function trySyncLocalUrlFromAgent({ quiet = false } = {}) {
+		try {
+			await refreshAgents();
+		} catch {
+			return false;
+		}
+
+		const baseFromAgent = loopbackAgentBaseUrl();
+		if (!baseFromAgent) return false;
+
+		const current = getBaseUrl();
+		if (normalizeBaseUrl(baseFromAgent) === normalizeBaseUrl(current)) return false;
+
+		setBaseUrl(baseFromAgent);
+		try {
+			const next = getBaseUrl();
+			$url.val(next);
+			$open.attr("href", `${next}/`);
+		} catch {
+			// ignore
+		}
+		if (!quiet) frappe.show_alert({ message: `Zebra URL yangilandi: ${escapeHtml(baseFromAgent)}`, indicator: "orange" });
+		return true;
 	}
 
 	async function zebraFetch(path, { method = "GET", body = null, timeoutMs = 15000 } = {}) {
@@ -1017,15 +1073,38 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 				if (health?.ok !== true) throw new Error("Health not ok");
 				setConnected(true);
 			} catch (e) {
-				setConnected(false, e?.message || e);
-				if (!quiet) {
-					frappe.msgprint({
-						title: "Zebra ulanish xatosi",
-						message: escapeHtml(e?.message || e),
-						indicator: "red",
-					});
+				// Common case: port changed (auto-selected). If a loopback Zebra agent is online,
+				// sync local URL from it and retry once.
+				let err = e;
+				try {
+					const changed = await trySyncLocalUrlFromAgent({ quiet: true });
+					if (changed) {
+						state.baseUrl = getBaseUrl();
+						try {
+							setStatusPill("Tekshirilmoqda...", { indicator: "orange" });
+							const health2 = await zebraFetch("/api/v1/health", { timeoutMs: 2500 });
+							if (health2?.ok !== true) throw new Error("Health not ok");
+							setConnected(true);
+							err = null;
+						} catch (e2) {
+							err = e2;
+						}
+					}
+				} catch {
+					// ignore
 				}
-				return;
+
+				if (err) {
+					setConnected(false, err?.message || err);
+					if (!quiet) {
+						frappe.msgprint({
+							title: "Zebra ulanish xatosi",
+							message: escapeHtml(err?.message || err),
+							indicator: "red",
+						});
+					}
+					return;
+				}
 			}
 
 			try {
