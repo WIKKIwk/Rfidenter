@@ -188,7 +188,62 @@ def mark_tag_printed(*, epc: str) -> dict[str, Any]:
 		},
 		update_modified=True,
 	)
-	return {"ok": True, "epc": epc_norm, "printed_at": now}
+
+	pr_name = str(frappe.db.get_value("RFID Zebra Tag", epc_norm, "purchase_receipt") or "").strip()
+	pr_created = False
+	pr_error = ""
+
+	if not pr_name:
+		row = frappe.db.get_value(
+			"RFID Zebra Tag",
+			epc_norm,
+			["item_code", "qty", "uom", "consume_ant_id"],
+			as_dict=True,
+		) or {}
+		ant_id = _normalize_ant(row.get("consume_ant_id"))
+
+		prev_user = frappe.session.user
+		try:
+			frappe.set_user("Administrator")
+		except Exception:
+			prev_user = None
+
+		try:
+			pr_name = _create_purchase_receipt_draft_for_tag(
+				{"epc": epc_norm, "item_code": row.get("item_code"), "qty": row.get("qty"), "uom": row.get("uom")},
+				ant_id=ant_id,
+				device="zebra-print",
+			)
+			frappe.db.set_value(
+				"RFID Zebra Tag",
+				epc_norm,
+				{"purchase_receipt": pr_name, "last_error": ""},
+				update_modified=True,
+			)
+			pr_created = True
+		except Exception as exc:
+			pr_error = str(exc)
+			frappe.db.set_value(
+				"RFID Zebra Tag",
+				epc_norm,
+				{"status": "Error", "last_error": pr_error[:500]},
+				update_modified=True,
+			)
+		finally:
+			if prev_user:
+				try:
+					frappe.set_user(prev_user)
+				except Exception:
+					pass
+
+	return {
+		"ok": True,
+		"epc": epc_norm,
+		"printed_at": now,
+		"purchase_receipt": pr_name,
+		"purchase_receipt_created": pr_created,
+		"purchase_receipt_error": pr_error,
+	}
 
 
 def list_recent_tags(*, limit: Any | None = None) -> dict[str, Any]:
@@ -231,8 +286,7 @@ def _claim_for_processing(epc: str) -> bool:
 			UPDATE `tabRFID Zebra Tag`
 			SET `status`='Processing', `last_error`=''
 			WHERE `name`=%s
-			  AND COALESCE(`purchase_receipt`, '') = ''
-			  AND COALESCE(`status`, '') NOT IN ('Consumed')
+			  AND COALESCE(`status`, '') NOT IN ('Consumed', 'Processing')
 			""",
 			(epc,),
 		)
@@ -253,7 +307,7 @@ def _set_error(epc: str, message: str) -> None:
 	)
 
 
-def _create_purchase_receipt_for_tag(tag: dict[str, Any], *, ant_id: int, device: str) -> str:
+def _create_purchase_receipt_draft_for_tag(tag: dict[str, Any], *, ant_id: int, device: str) -> str:
 	item_code = str(tag.get("item_code") or "").strip()
 	qty = float(tag.get("qty") or 0)
 	uom = str(tag.get("uom") or "").strip()
@@ -290,9 +344,40 @@ def _create_purchase_receipt_for_tag(tag: dict[str, Any], *, ant_id: int, device
 	pr_doc = frappe.get_doc(values)
 
 	pr_doc.insert(ignore_permissions=True)
-	if bool(getattr(settings, "submit_purchase_receipt", 0)):
-		pr_doc.submit()
 	return pr_doc.name
+
+
+def _submit_purchase_receipt(pr_name: str, *, ant_id: int, device: str) -> None:
+	name = str(pr_name or "").strip()
+	if not name:
+		raise ValueError("Purchase Receipt yo‘q.")
+	if not frappe.db.exists("Purchase Receipt", name):
+		raise frappe.DoesNotExistError(f"Purchase Receipt topilmadi: {name}")
+
+	pr_doc = frappe.get_doc("Purchase Receipt", name)
+	if int(getattr(pr_doc, "docstatus", 0)) == 2:
+		raise frappe.ValidationError(f"Purchase Receipt bekor qilingan: {name}")
+
+	if int(getattr(pr_doc, "docstatus", 0)) == 0:
+		# Ensure posting time reflects the actual consume event.
+		try:
+			pr_doc.set("posting_date", frappe.utils.nowdate())
+			pr_doc.set("posting_time", frappe.utils.nowtime())
+			pr_doc.set("set_posting_time", 1)
+		except Exception:
+			# best-effort
+			pass
+
+		try:
+			remarks = str(getattr(pr_doc, "remarks", "") or "")
+			append = f"RFID Zebra consume: ANT={ant_id} DEV={device}"
+			if append not in remarks:
+				pr_doc.set("remarks", (remarks + ("\n" if remarks else "") + append)[:1000])
+		except Exception:
+			# best-effort
+			pass
+
+		pr_doc.submit()
 
 
 def process_tag_reads(tags: list[dict[str, Any]], *, device: str = "") -> dict[str, Any]:
@@ -337,8 +422,6 @@ def process_tag_reads(tags: list[dict[str, Any]], *, device: str = "") -> dict[s
 			epc = str(row.get("epc") or row.get("name") or "").strip()
 			if not epc:
 				continue
-			if row.get("purchase_receipt"):
-				continue
 
 			ant_id = int(by_epc.get(epc) or 0)
 			expected = _normalize_ant(row.get("consume_ant_id"))
@@ -350,11 +433,15 @@ def process_tag_reads(tags: list[dict[str, Any]], *, device: str = "") -> dict[s
 				continue
 
 			try:
-				pr_name = _create_purchase_receipt_for_tag(
-					{"epc": epc, "item_code": row.get("item_code"), "qty": row.get("qty"), "uom": row.get("uom")},
-					ant_id=ant_id,
-					device=str(device or "")[:64],
-				)
+				pr_name = str(row.get("purchase_receipt") or "").strip()
+				if not pr_name:
+					pr_name = _create_purchase_receipt_draft_for_tag(
+						{"epc": epc, "item_code": row.get("item_code"), "qty": row.get("qty"), "uom": row.get("uom")},
+						ant_id=ant_id,
+						device=str(device or "")[:64],
+					)
+
+				_submit_purchase_receipt(pr_name, ant_id=ant_id, device=str(device or "")[:64])
 				frappe.db.set_value(
 					"RFID Zebra Tag",
 					epc,
