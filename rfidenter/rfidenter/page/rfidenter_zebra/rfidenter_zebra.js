@@ -317,7 +317,7 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 				<div class="panel panel-default" style="margin-top: 12px">
 					<div class="panel-heading">
 						<div class="flex" style="align-items:center; justify-content: space-between; gap: 10px; flex-wrap: wrap">
-							<b>Mahsulot → RFID Print → Purchase Receipt</b>
+								<b>Mahsulot → RFID Print → Stock Entry</b>
 							<button class="btn btn-default btn-xs rfz-open-settings">Item receipt settings</button>
 						</div>
 					</div>
@@ -366,7 +366,7 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 										<th style="width: 80px">UOM</th>
 										<th style="width: 70px">ANT</th>
 										<th style="width: 120px">Status</th>
-										<th style="width: 160px">Purchase Receipt</th>
+										<th style="width: 160px">Stock Entry</th>
 									</tr>
 								</thead>
 								<tbody class="rfz-recent"></tbody>
@@ -621,7 +621,7 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 				const ant = escapeHtml(it.consume_ant_id ?? "");
 				const st = escapeHtml(it.status || "");
 				const err = escapeHtml(it.last_error || "");
-				const pr = escapeHtml(it.purchase_receipt || "");
+				const se = escapeHtml(it.purchase_receipt || "");
 				$itemRecentBody.append(`
 					<tr>
 						<td>${i + 1}</td>
@@ -631,7 +631,7 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 						<td>${uom}</td>
 						<td>${ant}</td>
 						<td>${st}${err ? `<div class="text-muted" style="max-width:260px">${err}</div>` : ""}</td>
-						<td>${pr ? `<a href="/app/purchase-receipt/${pr}" target="_blank" rel="noopener noreferrer">${pr}</a>` : ""}</td>
+						<td>${se ? `<a href="/app/stock-entry/${se}" target="_blank" rel="noopener noreferrer">${se}</a>` : ""}</td>
 					</tr>
 				`);
 			}

@@ -300,7 +300,7 @@ def ingest_tags(**kwargs) -> dict[str, Any]:
 		published = False
 		frappe.log_error(title="RFIDenter publish_realtime failed", message=frappe.get_traceback())
 
-	# Zebra item-tags: auto-create Purchase Receipt (best-effort).
+	# Zebra item-tags: auto-submit Stock Entry (best-effort).
 	zebra_processed = 0
 	try:
 		zebra_result = zebra_items.process_tag_reads(agg_tags, device=device)

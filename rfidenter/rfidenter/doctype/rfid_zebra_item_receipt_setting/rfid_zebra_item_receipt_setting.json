@@ -51,13 +51,13 @@
    "default": "0",
    "fieldname": "submit_purchase_receipt",
    "fieldtype": "Check",
-   "label": "Auto Submit Purchase Receipt"
+   "label": "Auto Submit Stock Entry"
   },
   {
    "description": "Optional. If empty, default series is used.",
    "fieldname": "naming_series",
    "fieldtype": "Data",
-   "label": "Purchase Receipt Series"
+   "label": "Stock Entry Series"
   }
  ],
  "links": [],
@@ -96,4 +96,3 @@
  "sort_order": "DESC",
  "track_changes": 1
 }
-

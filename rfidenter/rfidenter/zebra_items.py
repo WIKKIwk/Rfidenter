@@ -67,9 +67,9 @@ def generate_epc_hex() -> str:
 	return (prefix + secrets.token_hex(remaining // 2).upper())[:24]
 
 
-def _default_purchase_receipt_series() -> str:
+def _default_stock_entry_series() -> str:
 	try:
-		meta = frappe.get_meta("Purchase Receipt")
+		meta = frappe.get_meta("Stock Entry")
 		field = meta.get_field("naming_series")
 		options = str(getattr(field, "options", "") or "").splitlines()
 		options = [o.strip() for o in options if o.strip()]
@@ -209,7 +209,7 @@ def mark_tag_printed(*, epc: str) -> dict[str, Any]:
 			prev_user = None
 
 		try:
-			pr_name = _create_purchase_receipt_draft_for_tag(
+			pr_name = _create_stock_entry_draft_for_tag(
 				{"epc": epc_norm, "item_code": row.get("item_code"), "qty": row.get("qty"), "uom": row.get("uom")},
 				ant_id=ant_id,
 				device="zebra-print",
@@ -240,9 +240,9 @@ def mark_tag_printed(*, epc: str) -> dict[str, Any]:
 		"ok": True,
 		"epc": epc_norm,
 		"printed_at": now,
-		"purchase_receipt": pr_name,
-		"purchase_receipt_created": pr_created,
-		"purchase_receipt_error": pr_error,
+		"stock_entry": pr_name,
+		"stock_entry_created": pr_created,
+		"stock_entry_error": pr_error,
 	}
 
 
@@ -307,7 +307,27 @@ def _set_error(epc: str, message: str) -> None:
 	)
 
 
-def _create_purchase_receipt_draft_for_tag(tag: dict[str, Any], *, ant_id: int, device: str) -> str:
+def _uom_conversion_factor(item_code: str, *, uom: str, stock_uom: str) -> float:
+	uom = str(uom or "").strip()
+	stock_uom = str(stock_uom or "").strip()
+	if not uom or not stock_uom or uom == stock_uom:
+		return 1.0
+
+	cf = frappe.db.get_value(
+		"UOM Conversion Detail",
+		{"parent": item_code, "parenttype": "Item", "uom": uom},
+		"conversion_factor",
+	)
+	try:
+		v = float(cf)
+	except Exception:
+		v = 0.0
+	if v <= 0:
+		raise ValueError(f"Conversion factor topilmadi: {item_code} ({uom} → {stock_uom})")
+	return min(1_000_000.0, v)
+
+
+def _create_stock_entry_draft_for_tag(tag: dict[str, Any], *, ant_id: int, device: str) -> str:
 	item_code = str(tag.get("item_code") or "").strip()
 	qty = float(tag.get("qty") or 0)
 	uom = str(tag.get("uom") or "").strip()
@@ -319,11 +339,20 @@ def _create_purchase_receipt_draft_for_tag(tag: dict[str, Any], *, ant_id: int, 
 		raise ValueError(f"Item receipt settings topilmadi: {item_code}")
 	settings = frappe.get_doc("RFID Zebra Item Receipt Setting", settings_name)
 
-	series = str(getattr(settings, "naming_series", "") or "").strip() or _default_purchase_receipt_series()
+	series = str(getattr(settings, "naming_series", "") or "").strip() or _default_stock_entry_series()
+
+	item = frappe.db.get_value("Item", item_code, ["stock_uom"], as_dict=True)
+	stock_uom = str((item or {}).get("stock_uom") or "").strip()
+	if not stock_uom:
+		raise ValueError("Item stock_uom aniqlanmadi.")
+
+	uom_value = uom or stock_uom
+	cf = _uom_conversion_factor(item_code, uom=uom_value, stock_uom=stock_uom)
+	transfer_qty = qty * cf
 
 	values = {
-		"doctype": "Purchase Receipt",
-		"supplier": settings.supplier,
+		"doctype": "Stock Entry",
+		"stock_entry_type": "Material Receipt",
 		"company": settings.company,
 		"posting_date": frappe.utils.nowdate(),
 		"posting_time": frappe.utils.nowtime(),
@@ -332,8 +361,12 @@ def _create_purchase_receipt_draft_for_tag(tag: dict[str, Any], *, ant_id: int, 
 			{
 				"item_code": item_code,
 				"qty": qty,
-				"uom": uom,
-				"warehouse": settings.warehouse,
+				"uom": uom_value,
+				"stock_uom": stock_uom,
+				"conversion_factor": cf,
+				"transfer_qty": transfer_qty,
+				"t_warehouse": settings.warehouse,
+				"allow_zero_valuation_rate": 1,
 			}
 		],
 		"remarks": f"RFID Zebra: EPC={tag.get('epc')} ANT={ant_id} DEV={device}",
@@ -341,47 +374,47 @@ def _create_purchase_receipt_draft_for_tag(tag: dict[str, Any], *, ant_id: int, 
 	if series:
 		values["naming_series"] = series
 
-	pr_doc = frappe.get_doc(values)
+	se_doc = frappe.get_doc(values)
 
-	pr_doc.insert(ignore_permissions=True)
-	return pr_doc.name
+	se_doc.insert(ignore_permissions=True)
+	return se_doc.name
 
 
-def _submit_purchase_receipt(pr_name: str, *, ant_id: int, device: str) -> None:
-	name = str(pr_name or "").strip()
+def _submit_stock_entry(se_name: str, *, ant_id: int, device: str) -> None:
+	name = str(se_name or "").strip()
 	if not name:
-		raise ValueError("Purchase Receipt yo‘q.")
-	if not frappe.db.exists("Purchase Receipt", name):
-		raise frappe.DoesNotExistError(f"Purchase Receipt topilmadi: {name}")
+		raise ValueError("Stock Entry yo‘q.")
+	if not frappe.db.exists("Stock Entry", name):
+		raise frappe.DoesNotExistError(f"Stock Entry topilmadi: {name}")
 
-	pr_doc = frappe.get_doc("Purchase Receipt", name)
-	if int(getattr(pr_doc, "docstatus", 0)) == 2:
-		raise frappe.ValidationError(f"Purchase Receipt bekor qilingan: {name}")
+	se_doc = frappe.get_doc("Stock Entry", name)
+	if int(getattr(se_doc, "docstatus", 0)) == 2:
+		raise frappe.ValidationError(f"Stock Entry bekor qilingan: {name}")
 
-	if int(getattr(pr_doc, "docstatus", 0)) == 0:
+	if int(getattr(se_doc, "docstatus", 0)) == 0:
 		# Ensure posting time reflects the actual consume event.
 		try:
-			pr_doc.set("posting_date", frappe.utils.nowdate())
-			pr_doc.set("posting_time", frappe.utils.nowtime())
-			pr_doc.set("set_posting_time", 1)
+			se_doc.set("posting_date", frappe.utils.nowdate())
+			se_doc.set("posting_time", frappe.utils.nowtime())
+			se_doc.set("set_posting_time", 1)
 		except Exception:
 			# best-effort
 			pass
 
 		try:
-			remarks = str(getattr(pr_doc, "remarks", "") or "")
+			remarks = str(getattr(se_doc, "remarks", "") or "")
 			append = f"RFID Zebra consume: ANT={ant_id} DEV={device}"
 			if append not in remarks:
-				pr_doc.set("remarks", (remarks + ("\n" if remarks else "") + append)[:1000])
+				se_doc.set("remarks", (remarks + ("\n" if remarks else "") + append)[:1000])
 		except Exception:
 			# best-effort
 			pass
 
-		pr_doc.submit()
+		se_doc.submit()
 
 
 def process_tag_reads(tags: list[dict[str, Any]], *, device: str = "") -> dict[str, Any]:
-	"""Process UHF reads: create Purchase Receipt for known Zebra EPCs."""
+	"""Process UHF reads: submit Stock Entry for known Zebra EPCs."""
 
 	if not tags:
 		return {"ok": True, "processed": 0}
@@ -433,21 +466,21 @@ def process_tag_reads(tags: list[dict[str, Any]], *, device: str = "") -> dict[s
 				continue
 
 			try:
-				pr_name = str(row.get("purchase_receipt") or "").strip()
-				if not pr_name:
-					pr_name = _create_purchase_receipt_draft_for_tag(
+				se_name = str(row.get("purchase_receipt") or "").strip()
+				if not se_name:
+					se_name = _create_stock_entry_draft_for_tag(
 						{"epc": epc, "item_code": row.get("item_code"), "qty": row.get("qty"), "uom": row.get("uom")},
 						ant_id=ant_id,
 						device=str(device or "")[:64],
 					)
 
-				_submit_purchase_receipt(pr_name, ant_id=ant_id, device=str(device or "")[:64])
+				_submit_stock_entry(se_name, ant_id=ant_id, device=str(device or "")[:64])
 				frappe.db.set_value(
 					"RFID Zebra Tag",
 					epc,
 					{
 						"status": "Consumed",
-						"purchase_receipt": pr_name,
+						"purchase_receipt": se_name,
 						"consumed_at": frappe.utils.now_datetime(),
 						"consumed_device": str(device or "")[:64],
 						"last_error": "",
