@@ -16,6 +16,8 @@ AGENT_QUEUE_PREFIX = "rfidenter_agent_queue:"
 AGENT_REQ_PREFIX = "rfidenter_agent_req:"
 AGENT_REPLY_PREFIX = "rfidenter_agent_reply:"
 SEEN_PREFIX = "rfidenter_seen:"
+SCALE_CACHE_PREFIX = "rfidenter_scale_weight:"
+SCALE_LAST_KEY = "rfidenter_scale_last"
 
 
 def _get_site_token() -> str:
@@ -154,6 +156,67 @@ def _sanitize_agent_id(raw: str) -> str:
 	s = re.sub(r"[^a-z0-9._-]+", "-", s)
 	s = re.sub(r"-{2,}", "-", s).strip("-")
 	return s[:64]
+
+def _normalize_weight(raw: Any) -> float | None:
+	if raw is None or raw == "":
+		return None
+	try:
+		val = float(raw)
+	except Exception:
+		return None
+	if not (-1_000_000 <= val <= 1_000_000):
+		return None
+	return val
+
+
+def _normalize_unit(raw: Any) -> str:
+	s = str(raw or "").strip().lower()
+	if not s:
+		return ""
+	mapper = {
+		"kg": "kg",
+		"kgs": "kg",
+		"kilogram": "kg",
+		"kilograms": "kg",
+		"g": "g",
+		"gram": "g",
+		"grams": "g",
+		"lb": "lb",
+		"lbs": "lb",
+		"pound": "lb",
+		"pounds": "lb",
+		"oz": "oz",
+		"ounce": "oz",
+		"ounces": "oz",
+	}
+	return mapper.get(s, s[:8])
+
+
+def _normalize_bool(raw: Any) -> bool | None:
+	if raw is None or raw == "":
+		return None
+	if isinstance(raw, bool):
+		return raw
+	s = str(raw).strip().lower()
+	if s in ("1", "true", "yes", "y", "on", "stable", "st"):
+		return True
+	if s in ("0", "false", "no", "n", "off", "unstable", "us"):
+		return False
+	return None
+
+
+def _scale_cache_ttl_sec() -> int:
+	try:
+		site_conf = frappe.get_site_config(silent=True) or {}
+	except Exception:
+		site_conf = {}
+
+	raw = site_conf.get("rfidenter_scale_ttl_sec") or frappe.conf.get("rfidenter_scale_ttl_sec") or 300
+	try:
+		ttl = int(raw)
+	except Exception:
+		ttl = 300
+	return max(5, min(3600, ttl))
 
 
 def _rpc_timeout_sec(raw: Any | None = None) -> int:
@@ -322,6 +385,87 @@ def ingest_tags(**kwargs) -> dict[str, Any]:
 		"saved_count": saved_count,
 		"zebra_processed": zebra_processed,
 	}
+
+@frappe.whitelist(allow_guest=True)
+def ingest_scale_weight(**kwargs) -> dict[str, Any]:
+	"""
+	Ingest realtime scale (tarozi) readings from Zebra bridge.
+
+	Expected JSON body:
+	{
+	  "device": "zebra-pc",
+	  "weight": 1.234,
+	  "unit": "kg",
+	  "stable": true,
+	  "port": "/dev/ttyUSB0",
+	  "ts": 1730000000000
+	}
+	"""
+	_require_auth_for_ingest()
+	if frappe.session.user and frappe.session.user != "Guest" and not has_rfidenter_access():
+		frappe.throw("RFIDenter: sizda RFIDer roli yo‘q.", frappe.PermissionError)
+
+	body = {}
+	try:
+		body = frappe.request.get_json(silent=True) or {}
+	except Exception:
+		body = {}
+
+	if not body:
+		try:
+			body = dict(frappe.local.form_dict or {})
+		except Exception:
+			body = {}
+		body.update(kwargs or {})
+
+	device = str(body.get("device") or body.get("devName") or "scale").strip() or "scale"
+	device_key = _sanitize_agent_id(device) or "scale"
+
+	weight = _normalize_weight(body.get("weight") or body.get("value") or body.get("kg") or body.get("qty"))
+	if weight is None:
+		frappe.throw("Scale weight noto‘g‘ri yoki yo‘q.", frappe.ValidationError)
+
+	unit = _normalize_unit(body.get("unit") or body.get("uom")) or "kg"
+	stable = _normalize_bool(body.get("stable") or body.get("is_stable"))
+	port = str(body.get("port") or "").strip()
+
+	ts_raw = body.get("ts")
+	ts = _now_ms()
+	try:
+		if ts_raw is not None:
+			ts = int(float(ts_raw))
+	except Exception:
+		ts = _now_ms()
+
+	payload = {"device": device, "weight": weight, "unit": unit, "stable": stable, "port": port, "ts": ts}
+
+	ttl = _scale_cache_ttl_sec()
+	cache = frappe.cache()
+	cache.set_value(f"{SCALE_CACHE_PREFIX}{device_key}", payload, expires_in_sec=ttl, shared=False)
+	cache.set_value(SCALE_LAST_KEY, payload, expires_in_sec=ttl, shared=False)
+
+	published = True
+	try:
+		frappe.publish_realtime("rfidenter_scale_weight", payload, after_commit=False)
+	except Exception:
+		published = False
+		frappe.log_error(title="RFIDenter scale realtime failed", message=frappe.get_traceback())
+
+	return {"ok": True, "device": device, "published": published}
+
+
+@frappe.whitelist()
+def get_scale_weight(device: str | None = None) -> dict[str, Any]:
+	if frappe.session.user and not has_rfidenter_access():
+		frappe.throw("RFIDenter: sizda RFIDer roli yo‘q.", frappe.PermissionError)
+
+	device_key = _sanitize_agent_id(device or "")
+	cache = frappe.cache()
+	reading = cache.get_value(f"{SCALE_CACHE_PREFIX}{device_key}") if device_key else None
+	if not reading:
+		reading = cache.get_value(SCALE_LAST_KEY)
+
+	return {"ok": bool(reading), "reading": reading or {}}
 
 
 def _upsert_saved_tags(tags: list[dict[str, Any]], device: str) -> int:
@@ -913,3 +1057,41 @@ def zebra_list_tags(limit: Any | None = None) -> dict[str, Any]:
 	if not has_rfidenter_access():
 		frappe.throw("RFIDenter: sizda RFIDer roli yo‘q.", frappe.PermissionError)
 	return zebra_items.list_recent_tags(limit=limit)
+
+
+@frappe.whitelist()
+def zebra_list_epcs(statuses: Any | None = None, limit: Any | None = None) -> dict[str, Any]:
+	"""List EPCs that belong to Zebra-printed tags."""
+	if not has_rfidenter_access():
+		frappe.throw("RFIDenter: sizda RFIDer roli yo‘q.", frappe.PermissionError)
+
+	status_list: list[str] = []
+	if statuses:
+		if isinstance(statuses, str):
+			try:
+				parsed = json.loads(statuses)
+				statuses = parsed if isinstance(parsed, list) else [statuses]
+			except Exception:
+				statuses = [x.strip() for x in statuses.split(",") if x.strip()]
+		if not isinstance(statuses, list):
+			statuses = [statuses]
+		status_list = [str(s or "").strip() for s in statuses if str(s or "").strip()]
+
+	if not status_list:
+		status_list = ["Printed", "Processing", "Consumed"]
+
+	try:
+		lim = int(limit) if limit is not None else 10000
+	except Exception:
+		lim = 10000
+	lim = max(100, min(100000, lim))
+
+	rows = frappe.get_all(
+		"RFID Zebra Tag",
+		fields=["epc"],
+		filters={"status": ["in", status_list]},
+		order_by="modified desc",
+		limit=lim,
+	)
+	epcs = [_normalize_hex(r.get("epc")) for r in rows if _normalize_hex(r.get("epc"))]
+	return {"ok": True, "count": len(epcs), "epcs": epcs}

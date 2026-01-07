@@ -79,6 +79,11 @@ frappe.pages["rfidenter-antenna"].on_page_load = function (wrapper) {
 		savedMax: 5000,
 		savedOpen: true,
 		savedDate: "",
+		zebraOnly: true,
+		zebraEpcs: new Set(),
+		zebraReady: false,
+		zebraLoading: false,
+		zebraLimit: 10000,
 	};
 
 	const $body = $(`
@@ -350,6 +355,55 @@ frappe.pages["rfidenter-antenna"].on_page_load = function (wrapper) {
 		return state.notes.get(String(epc || "").toUpperCase()) || "";
 	}
 
+	function isZebraAllowed(epc) {
+		if (!state.zebraOnly) return true;
+		if (!state.zebraReady) return false;
+		const key = normalizeEpc(epc);
+		if (!key) return false;
+		return state.zebraEpcs.has(key);
+	}
+
+	function pruneToZebraEpcs() {
+		if (!state.zebraOnly || !state.zebraReady) return;
+		for (const [ant, m] of state.byAnt.entries()) {
+			for (const epc of m.keys()) {
+				if (!state.zebraEpcs.has(epc)) m.delete(epc);
+			}
+			if (!m.size) state.byAnt.delete(ant);
+		}
+		for (const epc of state.saved.keys()) {
+			if (!state.zebraEpcs.has(epc)) state.saved.delete(epc);
+		}
+	}
+
+	async function fetchZebraEpcs({ quiet = false } = {}) {
+		if (!state.zebraOnly || state.zebraLoading) return;
+		state.zebraLoading = true;
+		try {
+			const r = await frappe.call("rfidenter.rfidenter.api.zebra_list_epcs", {
+				statuses: ["Printed", "Processing", "Consumed"],
+				limit: state.zebraLimit,
+			});
+			const msg = r?.message;
+			if (!msg || msg.ok !== true) throw new Error("Zebra EPC ro‘yxati olinmadi");
+			const list = Array.isArray(msg.epcs) ? msg.epcs : [];
+			state.zebraEpcs = new Set(list.map((e) => normalizeEpc(e)).filter(Boolean));
+			state.zebraReady = true;
+			pruneToZebraEpcs();
+			render();
+		} catch (e) {
+			if (!quiet) {
+				frappe.msgprint({
+					title: "Zebra filter xatosi",
+					message: escapeHtml(e?.message || e),
+					indicator: "red",
+				});
+			}
+		} finally {
+			state.zebraLoading = false;
+		}
+	}
+
 	async function fetchSavedTags({ quiet = false } = {}) {
 		if (savedLoading) return;
 		savedLoading = true;
@@ -363,6 +417,7 @@ frappe.pages["rfidenter-antenna"].on_page_load = function (wrapper) {
 			state.saved.clear();
 			for (const item of items) {
 				const epc = normalizeEpc(item?.epc);
+				if (!isZebraAllowed(epc)) continue;
 				if (!epc) continue;
 				const reads = Number(item?.reads ?? item?.count ?? 0);
 				const lastAt = item?.last_seen ? new Date(item.last_seen).getTime() : 0;
@@ -439,6 +494,7 @@ frappe.pages["rfidenter-antenna"].on_page_load = function (wrapper) {
 	function upsertTag({ device, tag, ts }) {
 		const epc = normalizeEpc(tag?.epcId);
 		const ant = clampAnt(tag?.antId ?? 0);
+		if (!isZebraAllowed(epc)) return;
 		if (!epc || ant <= 0) return;
 		const deltaRaw = Number(tag?.count ?? 1);
 		const delta = Number.isFinite(deltaRaw) ? Math.max(1, Math.min(1_000_000, Math.trunc(deltaRaw))) : 1;
@@ -465,6 +521,7 @@ frappe.pages["rfidenter-antenna"].on_page_load = function (wrapper) {
 	}
 
 	function upsertSavedTag({ device, epc, delta, ts }) {
+		if (!isZebraAllowed(epc)) return;
 		if (!epc) return;
 		const prev = state.saved.get(epc);
 		const reads = (prev?.reads || 0) + (delta || 1);
@@ -485,6 +542,7 @@ frappe.pages["rfidenter-antenna"].on_page_load = function (wrapper) {
 	function buildSavedRows() {
 		const want = normalizeEpc(state.filter);
 		const rows = [...state.saved.values()].filter((r) => {
+			if (!isZebraAllowed(r.epc)) return false;
 			if (want && !r.epc.includes(want)) return false;
 			if (state.savedDate) return dateKey(r.lastAt) === state.savedDate;
 			return true;
@@ -579,7 +637,12 @@ frappe.pages["rfidenter-antenna"].on_page_load = function (wrapper) {
 		const rows = buildDetailRows();
 		$title.text(`ANT${state.selectedAnt} — taglar`);
 		const notesCount = rows.reduce((acc, r) => acc + (getNote(r.epc) ? 1 : 0), 0);
-		$hint.text(`Ko‘rsatilmoqda: ${rows.length} ta EPC · Izohlar: ${notesCount}`);
+		const zebraInfo = state.zebraOnly
+			? state.zebraReady
+				? `Zebra EPC: ${state.zebraEpcs.size}`
+				: "Zebra EPC: yuklanmoqda"
+			: "Filter: All EPC";
+		$hint.text(`Ko‘rsatilmoqda: ${rows.length} ta EPC · Izohlar: ${notesCount} · ${zebraInfo}`);
 
 		$tagBody.empty();
 		for (let i = 0; i < rows.length; i++) {
@@ -687,8 +750,17 @@ frappe.pages["rfidenter-antenna"].on_page_load = function (wrapper) {
 		if (!state.lastAt || idleMs > 8000) setConnected(false);
 	}, 1000);
 
-	fetchNotes({ quiet: true }).then(() => render());
-	fetchSavedTags({ quiet: true });
+	if (state.zebraOnly) {
+		window.setInterval(() => fetchZebraEpcs({ quiet: true }), 60000);
+	}
+
 	setConnected(false);
 	render();
+
+	(async () => {
+		if (state.zebraOnly) await fetchZebraEpcs({ quiet: true });
+		await fetchNotes({ quiet: true });
+		await fetchSavedTags({ quiet: true });
+		render();
+	})().catch(() => {});
 };

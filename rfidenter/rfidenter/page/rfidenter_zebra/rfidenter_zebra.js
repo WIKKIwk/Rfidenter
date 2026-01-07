@@ -41,6 +41,13 @@ function sleep(ms) {
 	return new Promise((resolve) => setTimeout(resolve, Math.max(0, Number(ms) || 0)));
 }
 
+function normalizeEpcHex(raw) {
+	return String(raw ?? "")
+		.trim()
+		.toUpperCase()
+		.replace(/[^0-9A-F]/g, "");
+}
+
 frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 	const page = frappe.ui.make_app_page({
 		parent: wrapper,
@@ -327,6 +334,14 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 						max-height: 320px;
 						overflow: auto;
 					}
+					.rfidenter-zebra .rfz-scale-value {
+						font-weight: 600;
+						font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New",
+							monospace;
+					}
+					.rfidenter-zebra .rfz-scale-meta {
+						font-size: 12px;
+					}
 					.rfidenter-zebra details.rfz-advanced > summary {
 						cursor: pointer;
 						user-select: none;
@@ -402,11 +417,27 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 								<label class="text-muted">Antenna (consume)</label>
 								<div class="rfz-ant"></div>
 							</div>
-							<div class="col-md-3">
-								<div class="rfz-actions" style="margin-top: 18px">
-									<button class="btn btn-primary btn-sm rfz-print">Print</button>
-									<span class="text-muted rfz-status"></span>
-									<span class="text-muted rfz-queue"></span>
+								<div class="col-md-3">
+									<div class="rfz-actions" style="margin-top: 18px">
+										<button class="btn btn-primary btn-sm rfz-print">Print</button>
+										<button class="btn btn-default btn-sm rfz-read-epc" title="Tag ichidagi EPC’ni o‘qish">Read EPC</button>
+										<button class="btn btn-danger btn-sm rfz-stop" title="Printer navbatini to‘xtatish (~JA)">Stop</button>
+										<button class="btn btn-default btn-sm rfz-calibrate" title="Media kalibratsiya (~JC)">Calibrate</button>
+										<span class="text-muted rfz-status"></span>
+										<span class="text-muted rfz-queue"></span>
+									</div>
+								</div>
+							</div>
+
+						<div class="row rfz-form-row" style="margin-top: 6px">
+							<div class="col-md-12">
+								<div class="flex" style="gap: 10px; align-items: center; flex-wrap: wrap">
+									<span class="text-muted">Tarozi</span>
+									<span class="rfz-scale-value">--</span>
+									<span class="text-muted rfz-scale-meta">Ulanmagan</span>
+									<label class="checkbox-inline rfz-scale-autofill" style="margin: 0">
+										<input type="checkbox" checked /> Auto Qty/UOM
+									</label>
 								</div>
 							</div>
 						</div>
@@ -420,13 +451,14 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 										<th>Item</th>
 										<th style="width: 90px">Qty</th>
 										<th style="width: 80px">UOM</th>
-										<th style="width: 70px">ANT</th>
-										<th style="width: 120px">Status</th>
-										<th style="width: 160px">Stock Entry</th>
-									</tr>
-								</thead>
-								<tbody class="rfz-recent"></tbody>
-							</table>
+											<th style="width: 70px">ANT</th>
+											<th style="width: 120px">Status</th>
+											<th style="width: 160px">Stock Entry</th>
+											<th style="width: 90px">Action</th>
+										</tr>
+									</thead>
+									<tbody class="rfz-recent"></tbody>
+								</table>
 						</div>
 					</div>
 				</div>
@@ -567,14 +599,21 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 		const $itemGroupWrap = $body.find(".rfz-item-group");
 		const $itemWrap = $body.find(".rfz-item");
 		const $qtyWrap = $body.find(".rfz-qty");
-		const $uomWrap = $body.find(".rfz-uom");
-		const $antWrap = $body.find(".rfz-ant");
-		const $itemPrint = $body.find(".rfz-print");
-		const $itemStatus = $body.find(".rfz-status");
-		const $itemQueue = $body.find(".rfz-queue");
-		const $itemRecentBody = $body.find(".rfz-recent");
+			const $uomWrap = $body.find(".rfz-uom");
+			const $antWrap = $body.find(".rfz-ant");
+			const $scaleValue = $body.find(".rfz-scale-value");
+			const $scaleMeta = $body.find(".rfz-scale-meta");
+			const $scaleAutofill = $body.find(".rfz-scale-autofill input");
+			const $itemPrint = $body.find(".rfz-print");
+			const $itemReadEpc = $body.find(".rfz-read-epc");
+			const $itemStop = $body.find(".rfz-stop");
+			const $itemCalibrate = $body.find(".rfz-calibrate");
+			const $itemStatus = $body.find(".rfz-status");
+			const $itemQueue = $body.find(".rfz-queue");
+			const $itemRecentBody = $body.find(".rfz-recent");
 
-		const STORAGE_ITEM_QUEUE = "rfidenter.zebra.item_queue.v1";
+			const STORAGE_ITEM_QUEUE = "rfidenter.zebra.item_queue.v1";
+			const STORAGE_SCALE_AUTOFILL = "rfidenter.scale.autofill";
 
 		const itemState = {
 			controlsReady: false,
@@ -582,12 +621,141 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 			timer: null,
 			controls: { item_group: null, item: null, qty: null, uom: null, ant: null },
 		};
+		const scaleState = {
+			lastWeight: null,
+			lastUnit: "",
+			lastStable: null,
+			lastTs: 0,
+			timer: null,
+		};
 
 		function sanitizeZplText(value) {
 			const s = String(value ?? "").trim();
 			if (!s) return "";
 			// Avoid ZPL control characters inside ^FD ... ^FS.
 			return s.replaceAll("^", " ").replaceAll("~", " ").replace(/\s+/g, " ").trim().slice(0, 80);
+		}
+
+		function scaleAutofillEnabled() {
+			const raw = String(window.localStorage.getItem(STORAGE_SCALE_AUTOFILL) || "").trim().toLowerCase();
+			if (!raw) return true;
+			return raw === "1" || raw === "true" || raw === "yes" || raw === "on";
+		}
+
+		function setScaleAutofill(value) {
+			window.localStorage.setItem(STORAGE_SCALE_AUTOFILL, value ? "1" : "0");
+		}
+
+		function normalizeScaleUnit(raw) {
+			const s = String(raw || "").trim().toLowerCase();
+			if (!s) return "";
+			if (["kg", "kgs", "kilogram", "kilograms"].includes(s)) return "kg";
+			if (["g", "gram", "grams"].includes(s)) return "g";
+			if (["lb", "lbs", "pound", "pounds"].includes(s)) return "lb";
+			if (["oz", "ounce", "ounces"].includes(s)) return "oz";
+			return s;
+		}
+
+		function mapScaleUnitToUom(unit) {
+			const s = normalizeScaleUnit(unit);
+			const map = { kg: "Kg", g: "Gram", lb: "Pound", oz: "Ounce" };
+			return map[s] || "";
+		}
+
+		function formatScaleWeight(weight, unit) {
+			if (!Number.isFinite(weight)) return "--";
+			const val = Number(weight).toFixed(3);
+			const u = String(unit || "").trim();
+			return u ? `${val} ${u}` : val;
+		}
+
+		function formatScaleAge(ts) {
+			const n = Number(ts);
+			if (!Number.isFinite(n) || n <= 0) return "";
+			const delta = Date.now() - n;
+			if (delta < 1000) return "hozir";
+			if (delta < 60000) return `${Math.floor(delta / 1000)}s oldin`;
+			if (delta < 3600000) return `${Math.floor(delta / 60000)}m oldin`;
+			return fmtTime(n);
+		}
+
+		function parseScalePayload(payload) {
+			const data = payload?.reading || payload;
+			if (!data) return null;
+			const weight = Number(data.weight);
+			if (!Number.isFinite(weight)) return null;
+			const unit = normalizeScaleUnit(data.unit || "kg");
+			const stableRaw = data.stable;
+			const stable = stableRaw === true ? true : stableRaw === false ? false : null;
+			const ts = Number(data.ts || data.ts_ms || 0);
+			const port = String(data.port || "").trim();
+			const device = String(data.device || "").trim();
+			return { weight, unit, stable, ts, port, device };
+		}
+
+		function updateScaleUi(payload, { error = "" } = {}) {
+			if (!$scaleValue.length || !$scaleMeta.length) return;
+			if (!payload) {
+				$scaleValue.text("--");
+				$scaleMeta.text(error ? `Xato: ${error}` : "Ulanmagan");
+				return;
+			}
+			$scaleValue.text(formatScaleWeight(payload.weight, payload.unit));
+			const bits = [];
+			if (payload.port) bits.push(payload.port);
+			if (payload.stable === true) bits.push("stable");
+			if (payload.stable === false) bits.push("unstable");
+			const age = formatScaleAge(payload.ts);
+			if (age) bits.push(age);
+			$scaleMeta.text(bits.join(" · "));
+		}
+
+		function applyScaleToControls(payload) {
+			if (!payload) return;
+			if (!$scaleAutofill.length || !$scaleAutofill.is(":checked")) return;
+			if (!itemState.controlsReady) return;
+			if (!Number.isFinite(payload.weight)) return;
+			if (payload.stable === false) return;
+
+			const qtyControl = itemState.controls.qty;
+			const uomControl = itemState.controls.uom;
+			try {
+				const qtyInput = qtyControl?.$input;
+				if (qtyInput && qtyInput.is(":focus")) return;
+			} catch {
+				// ignore
+			}
+
+			qtyControl?.set_value?.(payload.weight);
+			const uom = mapScaleUnitToUom(payload.unit);
+			if (uom) {
+				uomControl?.set_value?.(uom);
+			}
+		}
+
+		function handleScalePayload(payload) {
+			const parsed = parseScalePayload(payload);
+			if (!parsed) return;
+			scaleState.lastWeight = parsed.weight;
+			scaleState.lastUnit = parsed.unit;
+			scaleState.lastStable = parsed.stable;
+			scaleState.lastTs = parsed.ts || Date.now();
+			updateScaleUi(parsed);
+			applyScaleToControls(parsed);
+		}
+
+		async function refreshScaleOnce({ quiet = false } = {}) {
+			try {
+				const r = await frappe.call("rfidenter.rfidenter.api.get_scale_weight");
+				const msg = r?.message;
+				if (!msg || msg.ok !== true) {
+					if (!quiet) updateScaleUi(null, { error: msg?.error || "" });
+					return;
+				}
+				handleScalePayload(msg.reading || msg);
+			} catch (e) {
+				if (!quiet) updateScaleUi(null, { error: e?.message || e });
+			}
 		}
 
 		function loadItemQueue() {
@@ -600,47 +768,170 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 			}
 		}
 
-		function saveItemQueue(queue) {
-			try {
-				window.localStorage.setItem(STORAGE_ITEM_QUEUE, JSON.stringify(Array.isArray(queue) ? queue : []));
-			} catch {
-				// ignore
+			function saveItemQueue(queue) {
+				try {
+					window.localStorage.setItem(STORAGE_ITEM_QUEUE, JSON.stringify(Array.isArray(queue) ? queue : []));
+				} catch {
+					// ignore
+				}
 			}
-		}
 
-		function renderItemQueue() {
-			const q = loadItemQueue();
-			const pending = q.filter((j) => j && j.state !== "done").length;
-			$itemQueue.text(pending ? `Queue: ${pending}` : "");
-		}
+			function renderItemQueue() {
+				const q = loadItemQueue();
+				const pending = q.filter((j) => j && j.state !== "done").length;
+				$itemQueue.text(pending ? `Queue: ${pending}` : "");
+			}
 
-		function newClientRequestId() {
-			const rnd = Math.random().toString(16).slice(2, 10);
-			return `rfz-${Date.now()}-${rnd}`;
-		}
+			function newClientRequestId() {
+				const rnd = Math.random().toString(16).slice(2, 10);
+				return `rfz-${Date.now()}-${rnd}`;
+			}
 
-		function buildItemZpl({ epc, itemCode, itemName, qty, uom }) {
-			const line1 = sanitizeZplText(itemCode);
-			const line2 = sanitizeZplText(itemName);
-			const line3 = sanitizeZplText(`${qty} ${uom}`);
-			const line4 = sanitizeZplText(epc);
+				$itemRecentBody.on("click", ".rfz-reprint", (e) => {
+					const $btn = $(e.currentTarget);
+					const epc = normalizeEpcHex($btn.data("epc"));
+					if (!epc) return;
 
-			// Simple label: encode EPC + print item info.
-			// `^RFW,H,,,A` auto-adjusts PC bits for EPC bank writes.
-			return [
-				"^XA",
-				"^RS8,,,1,N",
-				`^RFW,H,,,A^FD${epc}^FS`,
-				line1 ? `^FO30,30^A0N,34,34^FD${line1}^FS` : "",
-				line2 ? `^FO30,70^A0N,28,28^FD${line2}^FS` : "",
-				line3 ? `^FO30,110^A0N,34,34^FD${line3}^FS` : "",
-				line4 ? `^FO30,155^A0N,22,22^FD${line4}^FS` : "",
-				"^PQ1",
-				"^XZ",
-			]
-				.filter(Boolean)
-				.join("\n");
-		}
+				const itemCode = String($btn.data("itemCode") || "").trim();
+				const itemName = String($btn.data("itemName") || "").trim();
+					const qty = Number($btn.data("qty") || 1);
+					const uom = String($btn.data("uom") || "").trim();
+					const consumeAntId = clampInt($btn.data("consumeAntId"), { min: 0, max: 31, fallback: 0 });
+
+					const queue = loadItemQueue();
+					queue.unshift({
+						client_request_id: newClientRequestId(),
+						state: "print",
+						epc,
+						tag: { item_code: itemCode, item_name: itemName, qty, uom, consume_ant_id: consumeAntId },
+						created_at: Date.now(),
+						tries: 0,
+						last_error: "",
+					});
+					saveItemQueue(queue);
+					renderItemQueue();
+					setItemStatus(`Navbatga qo‘shildi: ${epc}`, { indicator: "gray" });
+					processItemQueue().catch(() => {});
+				});
+
+				const HV_CURRENT_EPC = "RFZ_CURRENT_EPC:";
+				const HV_BEFORE_EPC = "RFZ_BEFORE_EPC:";
+				const HV_AFTER_EPC = "RFZ_AFTER_EPC:";
+
+				function extractEpcFromHv(output, marker) {
+					const text = String(output ?? "");
+					const m = String(marker ?? "");
+					if (!text || !m) return "";
+
+					const idx = text.toUpperCase().indexOf(m.toUpperCase());
+					if (idx < 0) return "";
+
+					let i = idx + m.length;
+					let hex = "";
+					while (i < text.length && hex.length < 128) {
+						const ch = text[i];
+						if (/[0-9A-F]/i.test(ch)) hex += String(ch).toUpperCase();
+						i++;
+					}
+					return hex.length >= 24 ? hex.slice(-24) : "";
+				}
+
+				function hasHvMarker(output, marker) {
+					const text = String(output ?? "");
+					const m = String(marker ?? "");
+					if (!text || !m) return false;
+					return text.toUpperCase().includes(m.toUpperCase());
+				}
+
+				function buildRfidReadEpcHv({ fn, header }) {
+					const n = clampInt(fn, { min: 1, max: 99, fallback: 1 });
+					const h = sanitizeZplText(header);
+					// Read EPC bank from start (includes CRC+PC+EPC); ERP extracts the last 96-bit EPC (24 hex chars).
+					return [`^RFR,H,0,16,1^FN${n}^FS`, `^HV${n},,${h}^FS`];
+				}
+
+				function buildReadCurrentEpcZpl() {
+					return ["^XA", "^RS8,,,1,N", ...buildRfidReadEpcHv({ fn: 1, header: HV_CURRENT_EPC }), "^PQ1", "^XZ"]
+						.filter(Boolean)
+						.join("\n");
+				}
+
+				function isTransceiveUnsupportedError(err) {
+					const msg = String(err?.message || err || "")
+						.trim()
+						.toLowerCase();
+					return (
+						msg.includes("unknown command") ||
+						msg.includes("does not support reading") ||
+						msg.includes("failed to open") ||
+						msg.includes("failed to read") ||
+						msg.includes("bulk in endpoint not found") ||
+						msg.includes("unset zebra_device_path")
+					);
+				}
+
+				async function zebraTransceiveZpl(zpl, { readTimeoutMs = 3000, maxBytes = 32768, timeoutMs = 60000 } = {}) {
+					let connMode = getConnMode();
+					if (connMode === "agent" && !getSelectedAgentId()) {
+						await switchToLocalIfPossible({ quiet: true });
+						connMode = getConnMode();
+					}
+
+					if (connMode === "agent") {
+						const reply = await agentCall(
+							"ZEBRA_TRANSCEIVE_ZPL",
+							{ zpl, read_timeout_ms: readTimeoutMs, max_bytes: maxBytes },
+							{ timeoutMs }
+						);
+						if (!reply?.ok) throw new Error(reply?.error || "Transceive failed");
+						return reply.result;
+					}
+
+					return await zebraFetch("/api/v1/transceive", {
+						method: "POST",
+						body: { zpl, read_timeout_ms: readTimeoutMs, max_bytes: maxBytes },
+						timeoutMs,
+					});
+				}
+
+				async function zebraSendZpl(zpl, { timeoutMs = 30000 } = {}) {
+					let connMode = getConnMode();
+					if (connMode === "agent" && !getSelectedAgentId()) {
+						await switchToLocalIfPossible({ quiet: true });
+						connMode = getConnMode();
+					}
+
+					if (connMode === "agent") {
+						const reply = await agentCall("ZEBRA_PRINT_ZPL", { zpl, copies: 1 }, { timeoutMs });
+						if (!reply?.ok) throw new Error(reply?.error || "Print failed");
+						return reply.result;
+					}
+
+					return await zebraFetch("/v1/print-jobs", { method: "POST", body: { zpl, copies: 1 }, timeoutMs });
+				}
+
+				function buildItemZpl({ epc, itemCode, itemName, qty, uom, verifyEpc = false }) {
+					const line1 = sanitizeZplText(itemCode);
+					const line2 = sanitizeZplText(itemName);
+					const line3 = sanitizeZplText(`${qty} ${uom}`);
+					const line4 = sanitizeZplText(epc);
+
+					// Simple label: encode EPC + print item info.
+					// `^RFW,H,,,A` auto-adjusts PC bits for EPC bank writes.
+					const lines = ["^XA", "^RS8,,,1,N"];
+					if (verifyEpc) lines.push(...buildRfidReadEpcHv({ fn: 1, header: HV_BEFORE_EPC }));
+					lines.push(`^RFW,H,,,A^FD${epc}^FS`);
+					if (verifyEpc) lines.push(...buildRfidReadEpcHv({ fn: 2, header: HV_AFTER_EPC }));
+					lines.push(
+						line1 ? `^FO30,30^A0N,34,34^FD${line1}^FS` : "",
+						line2 ? `^FO30,70^A0N,28,28^FD${line2}^FS` : "",
+						line3 ? `^FO30,110^A0N,34,34^FD${line3}^FS` : "",
+						line4 ? `^FO30,155^A0N,22,22^FD${line4}^FS` : "",
+						"^PQ1",
+						"^XZ"
+					);
+					return lines.filter(Boolean).join("\n");
+			}
 
 		function setItemStatus(text, { indicator = "gray" } = {}) {
 			$itemStatus.text(String(text || ""));
@@ -661,37 +952,56 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 			}
 		}
 
-		function renderRecentTags(items) {
-			$itemRecentBody.empty();
-			if (!items.length) {
-				$itemRecentBody.append(`<tr><td colspan="8" class="text-muted">(yo‘q)</td></tr>`);
-				return;
+			function renderRecentTags(items) {
+				$itemRecentBody.empty();
+				if (!items.length) {
+					$itemRecentBody.append(`<tr><td colspan="9" class="text-muted">(yo‘q)</td></tr>`);
+					return;
+				}
+				for (let i = 0; i < items.length; i++) {
+					const it = items[i] || {};
+					const epcRaw = String(it.epc || "");
+					const itemCodeRaw = String(it.item_code || "");
+					const itemNameRaw = String(it.item_name || "");
+					const uomRaw = String(it.uom || "");
+					const antRaw = String(it.consume_ant_id ?? "");
+					const statusRaw = String(it.status || "");
+
+					const epc = escapeHtml(epcRaw);
+					const item = escapeHtml(itemCodeRaw);
+					const name = escapeHtml(itemNameRaw);
+					const qty = escapeHtml(it.qty ?? "");
+					const uom = escapeHtml(uomRaw);
+					const ant = escapeHtml(antRaw);
+					const st = escapeHtml(statusRaw);
+					const err = escapeHtml(it.last_error || "");
+					const se = escapeHtml(it.purchase_receipt || "");
+					const canReprint = Boolean(epcRaw) && statusRaw !== "Consumed";
+					const reprintBtn = canReprint
+						? `<button type="button" class="btn btn-default btn-xs rfz-reprint"
+							data-epc="${epc}"
+							data-item-code="${item}"
+							data-item-name="${name}"
+							data-qty="${qty}"
+							data-uom="${uom}"
+							data-consume-ant-id="${ant}"
+						  >Reprint</button>`
+						: `<button type="button" class="btn btn-default btn-xs" disabled title="Consumed">Reprint</button>`;
+					$itemRecentBody.append(`
+						<tr>
+							<td>${i + 1}</td>
+							<td><code>${epc}</code></td>
+							<td><div><code>${item}</code></div><div class="text-muted">${name}</div></td>
+							<td>${qty}</td>
+							<td>${uom}</td>
+							<td>${ant}</td>
+							<td>${st}${err ? `<div class="text-muted" style="max-width:260px">${err}</div>` : ""}</td>
+							<td>${se ? `<a href="/app/stock-entry/${se}" target="_blank" rel="noopener noreferrer">${se}</a>` : ""}</td>
+							<td>${reprintBtn}</td>
+						</tr>
+					`);
+				}
 			}
-			for (let i = 0; i < items.length; i++) {
-				const it = items[i] || {};
-				const epc = escapeHtml(it.epc || "");
-				const item = escapeHtml(it.item_code || "");
-				const name = escapeHtml(it.item_name || "");
-				const qty = escapeHtml(it.qty ?? "");
-				const uom = escapeHtml(it.uom || "");
-				const ant = escapeHtml(it.consume_ant_id ?? "");
-				const st = escapeHtml(it.status || "");
-				const err = escapeHtml(it.last_error || "");
-				const se = escapeHtml(it.purchase_receipt || "");
-				$itemRecentBody.append(`
-					<tr>
-						<td>${i + 1}</td>
-						<td><code>${epc}</code></td>
-						<td><div><code>${item}</code></div><div class="text-muted">${name}</div></td>
-						<td>${qty}</td>
-						<td>${uom}</td>
-						<td>${ant}</td>
-						<td>${st}${err ? `<div class="text-muted" style="max-width:260px">${err}</div>` : ""}</td>
-						<td>${se ? `<a href="/app/stock-entry/${se}" target="_blank" rel="noopener noreferrer">${se}</a>` : ""}</td>
-					</tr>
-				`);
-			}
-		}
 
 		async function resolveItemDefaults(itemCode) {
 			const code = String(itemCode || "").trim();
@@ -766,31 +1076,32 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 					parent: $uomWrap,
 					render_input: true,
 				});
-				me.controls.ant = frappe.ui.form.make_control({
-					df: {
-						label: "ANT",
-						description: "",
-						fieldtype: "Select",
-						options: ["0", ...Array.from({ length: 31 }, (_, i) => String(i + 1))].join("\n"),
-						default: "1",
-					},
-				parent: $antWrap,
-				render_input: true,
-			});
+					me.controls.ant = frappe.ui.form.make_control({
+						df: {
+							label: "ANT",
+							description:
+								"0 = istalgan antenna. 1..31 = faqat shu antenna (qat'iy qilish: rfidenter_zebra_consume_requires_ant_match=1).",
+							fieldtype: "Select",
+							options: ["0", ...Array.from({ length: 31 }, (_, i) => String(i + 1))].join("\n"),
+							default: "0",
+						},
+					parent: $antWrap,
+					render_input: true,
+				});
 
 			me.controls.item_group.toggle_label(false);
 			me.controls.item.toggle_label(false);
 			me.controls.qty.toggle_label(false);
-			me.controls.uom.toggle_label(false);
-			me.controls.ant.toggle_label(false);
+				me.controls.uom.toggle_label(false);
+				me.controls.ant.toggle_label(false);
 
-			me.controls.qty.set_value(1);
-			me.controls.ant.set_value("1");
+				me.controls.qty.set_value(1);
+				me.controls.ant.set_value("0");
 
-			itemState.controlsReady = true;
-		}
+				itemState.controlsReady = true;
+			}
 
-		async function processItemQueue() {
+			async function processItemQueue() {
 			if (itemState.processing) return;
 			itemState.processing = true;
 			try {
@@ -826,58 +1137,54 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 						}
 					}
 
-					if (job.state === "print") {
-						const epc = String(job.epc || "").trim();
-						if (!epc) {
-							job.state = "create";
-							changed = true;
-							continue;
-						}
-
-							setItemStatus("Zebra’ga yuborilmoqda...", { indicator: "gray" });
-							try {
-								const tag = job.tag || {};
-								const zpl = buildItemZpl({
-									epc,
-									itemCode: tag.item_code || job.item_code,
-									itemName: tag.item_name || "",
-									qty: tag.qty || job.qty,
-									uom: tag.uom || job.uom,
-								});
-
-								let connMode = getConnMode();
-								if (connMode === "agent" && !getSelectedAgentId()) {
-									await switchToLocalIfPossible({ quiet: true });
-									connMode = getConnMode();
-								}
-
-								if (connMode === "agent") {
-									const reply = await agentCall("ZEBRA_PRINT_ZPL", { zpl, copies: 1 }, { timeoutMs: 90000 });
-									if (!reply?.ok) throw new Error(reply?.error || "Print failed");
-								} else {
-									await zebraFetch("/v1/print-jobs", { method: "POST", body: { zpl, copies: 1 }, timeoutMs: 60000 });
-								}
-
-							try {
-								await frappe.call("rfidenter.rfidenter.api.zebra_mark_tag_printed", { epc });
-							} catch {
-								// ignore
+						if (job.state === "print") {
+							const epc = String(job.epc || "").trim();
+							if (!epc) {
+								job.state = "create";
+								changed = true;
+								continue;
 							}
 
-							job.state = "done";
-							job.last_error = "";
-							changed = true;
-							setItemStatus("Print OK", { indicator: "green" });
-							await refreshRecentTags({ quiet: true });
-						} catch (e) {
-							job.tries = Number(job.tries || 0) + 1;
-							job.last_error = String(e?.message || e).slice(0, 300);
-							changed = true;
-							setItemStatus(`Print xato: ${job.last_error}`, { indicator: "red" });
-							break;
+								setItemStatus("Printer resume...", { indicator: "gray" });
+								try {
+									const tag = job.tag || {};
+									await zebraSendZpl("~PS", { timeoutMs: 30000 });
+
+									setItemStatus("Zebra’ga yuborilmoqda...", { indicator: "gray" });
+									const zpl = buildItemZpl({
+										epc,
+										itemCode: tag.item_code || job.item_code,
+										itemName: tag.item_name || "",
+										qty: tag.qty || job.qty,
+										uom: tag.uom || job.uom,
+										verifyEpc: false,
+									});
+
+									await zebraTransceiveZpl(zpl, { readTimeoutMs: 7000, timeoutMs: 90000 });
+									const okText = "Print OK";
+									const okIndicator = "green";
+
+								try {
+									await frappe.call("rfidenter.rfidenter.api.zebra_mark_tag_printed", { epc });
+								} catch {
+									// ignore
+								}
+
+								job.state = "done";
+								job.last_error = "";
+								changed = true;
+								setItemStatus(okText, { indicator: okIndicator });
+								await refreshRecentTags({ quiet: true });
+								} catch (e) {
+									job.tries = Number(job.tries || 0) + 1;
+									job.last_error = String(e?.message || e).slice(0, 300);
+									changed = true;
+									job.state = "error";
+									setItemStatus(`Print xato (to‘xtatildi): ${job.last_error}`, { indicator: "red" });
+									break;
+							}
 						}
 					}
-				}
 
 				if (changed) saveItemQueue(queue);
 				renderItemQueue();
@@ -1190,22 +1497,11 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 		renderDevices();
 	}
 
-		async function feedLabel() {
-			try {
-				$writeStatus.text("Feeding...");
+	async function feedLabel() {
+		try {
+			$writeStatus.text("Feeding...");
 
-				let connMode = getConnMode();
-				if (connMode === "agent" && !getSelectedAgentId()) {
-					await switchToLocalIfPossible({ quiet: false, message: "Zebra agent topilmadi — Local URL orqali davom etyapmiz." });
-					connMode = getConnMode();
-				}
-
-				if (connMode === "agent") {
-					const reply = await agentCall("ZEBRA_PRINT_ZPL", { zpl: "~PH", copies: 1 }, { timeoutMs: 30000 });
-					if (!reply?.ok) throw new Error(reply?.error || "Feed failed");
-				} else {
-					await zebraFetch("/v1/print-jobs", { method: "POST", body: { zpl: "~PH", copies: 1 } });
-				}
+			await zebraSendZpl("~PH", { timeoutMs: 30000 });
 			$writeStatus.text("OK");
 		} catch (e) {
 			$writeStatus.text("");
@@ -1308,6 +1604,13 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 			// ignore
 		}
 	});
+	frappe.realtime.on("rfidenter_scale_weight", (payload) => {
+		try {
+			handleScalePayload(payload);
+		} catch {
+			// ignore
+		}
+	});
 
 	$connMode.on("change", () => {
 		autoFallbackAllowed = false;
@@ -1334,13 +1637,90 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 			setBaseUrl($url.val());
 			refreshAll({ quiet: true });
 		});
-		$body.find(".rfz-open-settings").on("click", () => {
-			frappe.set_route("List", "RFID Zebra Item Receipt Setting");
-		});
-		$itemPrint.on("click", async () => {
-			await ensureItemControls();
-			const itemCode = String(itemState.controls.item?.get_value?.() || "").trim();
-			const qty = Number(itemState.controls.qty?.get_value?.() || 0);
+			$body.find(".rfz-open-settings").on("click", () => {
+				frappe.set_route("List", "RFID Zebra Item Receipt Setting");
+			});
+			$itemReadEpc.on("click", async () => {
+				try {
+					$itemReadEpc.prop("disabled", true);
+					setItemStatus("EPC o‘qilmoqda...", { indicator: "gray" });
+					const tr = await zebraTransceiveZpl(buildReadCurrentEpcZpl(), { readTimeoutMs: 4000, timeoutMs: 30000 });
+					const output = String(tr?.output || "");
+					const epc = extractEpcFromHv(output, HV_CURRENT_EPC);
+					if (epc) {
+						setItemStatus(`Tag EPC: ${epc}`, { indicator: "green" });
+						frappe.msgprint({ title: "Tag EPC", message: `<code>${escapeHtml(epc)}</code>`, indicator: "green" });
+					} else if (hasHvMarker(output, HV_CURRENT_EPC)) {
+						setItemStatus("Tag EPC: (bo‘sh)", { indicator: "orange" });
+						frappe.msgprint({ title: "Tag EPC", message: escapeHtml("(bo‘sh)"), indicator: "orange" });
+					} else {
+						setItemStatus("EPC topilmadi.", { indicator: "orange" });
+						frappe.msgprint({
+							title: "Tag EPC",
+							message: escapeHtml(output || "Javob yo‘q."),
+							indicator: "orange",
+						});
+					}
+				} catch (e) {
+					const msg = String(e?.message || e);
+					setItemStatus(`Read xato: ${msg}`, { indicator: "orange" });
+					frappe.msgprint({
+						title: "Read xatosi",
+						message: escapeHtml(
+							isTransceiveUnsupportedError(e)
+								? `${msg}\n\nEslatma: EPC o‘qish uchun zebra-bridge PyUSB mode kerak (ZEBRA_DEVICE_PATH o‘chirilgan bo‘lsin).`
+								: msg
+						),
+						indicator: "red",
+					});
+				} finally {
+					$itemReadEpc.prop("disabled", false);
+				}
+			});
+			$itemStop.on("click", () => {
+				frappe.confirm("Printer navbatini to‘xtatamizmi? (~JA)", () => {
+					(async () => {
+						try {
+							$itemStop.prop("disabled", true);
+							setItemStatus("To‘xtatilmoqda...", { indicator: "gray" });
+
+							await zebraSendZpl("~JA", { timeoutMs: 30000 });
+
+							setItemStatus("To‘xtatish yuborildi.", { indicator: "orange" });
+						} catch (e) {
+							setItemStatus(`Stop xato: ${e?.message || e}`, { indicator: "orange" });
+							frappe.msgprint({ title: "Stop xatosi", message: escapeHtml(e?.message || e), indicator: "red" });
+						} finally {
+							$itemStop.prop("disabled", false);
+						}
+					})().catch(() => {});
+				});
+			});
+			$itemCalibrate.on("click", () => {
+				frappe.confirm("Media kalibratsiya qilinsinmi? (1-3 label ketishi mumkin)", () => {
+					(async () => {
+						try {
+							$itemCalibrate.prop("disabled", true);
+							setItemStatus("Kalibratsiya yuborilmoqda...", { indicator: "gray" });
+							await zebraSendZpl("~JC", { timeoutMs: 30000 });
+							setItemStatus("Kalibratsiya yuborildi.", { indicator: "green" });
+						} catch (e) {
+							setItemStatus(`Kalibratsiya xato: ${e?.message || e}`, { indicator: "orange" });
+							frappe.msgprint({
+								title: "Kalibratsiya xatosi",
+								message: escapeHtml(e?.message || e),
+								indicator: "red",
+							});
+						} finally {
+							$itemCalibrate.prop("disabled", false);
+						}
+					})().catch(() => {});
+				});
+			});
+			$itemPrint.on("click", async () => {
+				await ensureItemControls();
+				const itemCode = String(itemState.controls.item?.get_value?.() || "").trim();
+				const qty = Number(itemState.controls.qty?.get_value?.() || 0);
 			const uom = String(itemState.controls.uom?.get_value?.() || "").trim();
 			const ant = String(itemState.controls.ant?.get_value?.() || "0").trim();
 
@@ -1377,6 +1757,12 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 		$body.find(".rfidenter-zebra-feed").on("click", () => feedLabel());
 		$body.find(".rfidenter-zebra-write").on("click", () => doEncode());
 		$copyBtn.on("click", () => copyEpcList());
+		if ($scaleAutofill.length) {
+			$scaleAutofill.prop("checked", scaleAutofillEnabled());
+			$scaleAutofill.on("change", () => {
+				setScaleAutofill($scaleAutofill.is(":checked"));
+			});
+		}
 
 	updateMode();
 	updateCopies();
@@ -1387,6 +1773,7 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 		ensureItemControls().catch(() => {});
 		renderItemQueue();
 		refreshRecentTags({ quiet: true }).catch(() => {});
+		refreshScaleOnce({ quiet: true }).catch(() => {});
 		processItemQueue().catch(() => {});
 		try {
 			window.addEventListener("online", () => processItemQueue().catch(() => {}));
@@ -1396,6 +1783,12 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 		try {
 			if (itemState.timer) window.clearInterval(itemState.timer);
 			itemState.timer = window.setInterval(() => processItemQueue().catch(() => {}), 5000);
+		} catch {
+			// ignore
+		}
+		try {
+			if (scaleState.timer) window.clearInterval(scaleState.timer);
+			scaleState.timer = window.setInterval(() => refreshScaleOnce({ quiet: true }).catch(() => {}), 100);
 		} catch {
 			// ignore
 		}

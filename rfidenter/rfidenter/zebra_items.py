@@ -41,6 +41,19 @@ def _get_site_setting(key: str, default: Any = None) -> Any:
 	return site_conf.get(key, frappe.conf.get(key, default))
 
 
+def _consume_requires_ant_match() -> bool:
+	"""Whether Zebra consume must match `consume_ant_id`.
+
+	Default: False (any antenna read can consume).
+	"""
+
+	raw = _get_site_setting("rfidenter_zebra_consume_requires_ant_match", False)
+	if isinstance(raw, bool):
+		return raw
+	s = str(raw or "").strip().lower()
+	return s in ("1", "true", "yes", "y", "on")
+
+
 def _get_epc_prefix() -> str:
 	"""Return an optional EPC hex prefix for Zebra-generated tags.
 
@@ -352,11 +365,12 @@ def _create_stock_entry_draft_for_tag(tag: dict[str, Any], *, ant_id: int, devic
 
 	values = {
 		"doctype": "Stock Entry",
-		"stock_entry_type": "Material Receipt",
+		"stock_entry_type": "Material Issue",
 		"company": settings.company,
 		"posting_date": frappe.utils.nowdate(),
 		"posting_time": frappe.utils.nowtime(),
 		"set_posting_time": 1,
+		"from_warehouse": settings.warehouse,
 		"items": [
 			{
 				"item_code": item_code,
@@ -365,7 +379,7 @@ def _create_stock_entry_draft_for_tag(tag: dict[str, Any], *, ant_id: int, devic
 				"stock_uom": stock_uom,
 				"conversion_factor": cf,
 				"transfer_qty": transfer_qty,
-				"t_warehouse": settings.warehouse,
+				"s_warehouse": settings.warehouse,
 				"allow_zero_valuation_rate": 1,
 			}
 		],
@@ -419,8 +433,10 @@ def process_tag_reads(tags: list[dict[str, Any]], *, device: str = "") -> dict[s
 	if not tags:
 		return {"ok": True, "processed": 0}
 
-	# Extract unique EPCs with antenna id.
-	by_epc: dict[str, int] = {}
+	require_ant_match = _consume_requires_ant_match()
+
+	# Extract unique EPCs and the set of antennas that saw them in this batch.
+	by_epc: dict[str, set[int]] = {}
 	for t in tags:
 		if not isinstance(t, dict):
 			continue
@@ -428,7 +444,10 @@ def process_tag_reads(tags: list[dict[str, Any]], *, device: str = "") -> dict[s
 		if not epc:
 			continue
 		ant = _normalize_ant(t.get("antId") or t.get("ANT") or 0)
-		by_epc.setdefault(epc, ant)
+		if ant > 0:
+			by_epc.setdefault(epc, set()).add(ant)
+		else:
+			by_epc.setdefault(epc, set())
 
 	epcs = list(by_epc.keys())[:200]
 	if not epcs:
@@ -456,10 +475,20 @@ def process_tag_reads(tags: list[dict[str, Any]], *, device: str = "") -> dict[s
 			if not epc:
 				continue
 
-			ant_id = int(by_epc.get(epc) or 0)
+			ants = by_epc.get(epc)
+			if not isinstance(ants, set):
+				ants = set()
+
 			expected = _normalize_ant(row.get("consume_ant_id"))
-			if expected and ant_id and expected != ant_id:
+
+			if expected > 0 and expected in ants:
+				ant_id = expected
+			elif require_ant_match and expected > 0 and ants:
+				# This tag was seen on some other antenna, and strict match is enabled.
 				continue
+			else:
+				# Default: allow consume from any antenna (or when antenna id isn't available).
+				ant_id = min(ants) if ants else 0
 
 			# Claim first to avoid double receipts.
 			if not _claim_for_processing(epc):
