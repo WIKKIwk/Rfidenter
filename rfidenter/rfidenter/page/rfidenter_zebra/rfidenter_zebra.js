@@ -687,7 +687,7 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 			const unit = normalizeScaleUnit(data.unit || "kg");
 			const stableRaw = data.stable;
 			const stable = stableRaw === true ? true : stableRaw === false ? false : null;
-			const ts = Number(data.ts || data.ts_ms || 0);
+			const ts = Number(data.ts || data.ts_ms || data.timestampMs || data.timestamp_ms || 0);
 			const port = String(data.port || "").trim();
 			const device = String(data.device || "").trim();
 			return { weight, unit, stable, ts, port, device };
@@ -745,6 +745,22 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 		}
 
 		async function refreshScaleOnce({ quiet = false } = {}) {
+			const connMode = getConnMode();
+			if (connMode === "local") {
+				try {
+					const data = await zebraFetch("/api/v1/scale", { timeoutMs: 1500 });
+					if (!data || data.ok === false) {
+						if (!quiet) updateScaleUi(null, { error: data?.error || "" });
+						return;
+					}
+					handleScalePayload(data);
+					return;
+				} catch (e) {
+					if (!quiet) updateScaleUi(null, { error: e?.message || e });
+					// fall through to ERP fallback
+				}
+			}
+
 			try {
 				const r = await frappe.call("rfidenter.rfidenter.api.get_scale_weight");
 				const msg = r?.message;
@@ -1150,17 +1166,17 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 									const tag = job.tag || {};
 									await zebraSendZpl("~PS", { timeoutMs: 30000 });
 
-									setItemStatus("Zebra’ga yuborilmoqda...", { indicator: "gray" });
-									const zpl = buildItemZpl({
-										epc,
-										itemCode: tag.item_code || job.item_code,
-										itemName: tag.item_name || "",
-										qty: tag.qty || job.qty,
-										uom: tag.uom || job.uom,
-										verifyEpc: false,
-									});
+								setItemStatus("Zebra’ga yuborilmoqda...", { indicator: "gray" });
+								const zpl = buildItemZpl({
+									epc,
+									itemCode: tag.item_code || job.item_code,
+									itemName: tag.item_name || "",
+									qty: tag.qty || job.qty,
+									uom: tag.uom || job.uom,
+									verifyEpc: false,
+								});
 
-									await zebraTransceiveZpl(zpl, { readTimeoutMs: 7000, timeoutMs: 90000 });
+								await zebraSendZpl(zpl, { timeoutMs: 90000 });
 									const okText = "Print OK";
 									const okIndicator = "green";
 
@@ -1279,10 +1295,33 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 					device_path: c?.zebra_device_path,
 					feed_after_encode: c?.zebra_feed_after_encode,
 					template_enabled: c?.zebra_template_enabled,
+					transport: c?.transport || c?.zebra_transport,
+					transceive_supported: c?.transceive_supported ?? c?.zebra_transceive_supported,
 				},
 				null,
 				0
 			)
+		);
+	}
+
+	function isTransceiveSupported() {
+		const c = state.config || {};
+		if (c?.transceive_supported === true || c?.transceive_supported === false) return Boolean(c.transceive_supported);
+		if (c?.zebra_transceive_supported === true || c?.zebra_transceive_supported === false)
+			return Boolean(c.zebra_transceive_supported);
+		const transport = String(c?.transport || c?.zebra_transport || "").trim().toLowerCase();
+		return transport ? transport === "usb" : true;
+	}
+
+	function applyTransportCapabilities() {
+		if (!$itemReadEpc.length) return;
+		const supported = isTransceiveSupported();
+		$itemReadEpc.prop("disabled", !supported);
+		$itemReadEpc.attr(
+			"title",
+			supported
+				? "Tag ichidagi EPC’ni o‘qish"
+				: "EPC o‘qish uchun USB transport kerak (ZEBRA_TRANSPORT=usb)"
 		);
 	}
 
@@ -1426,6 +1465,7 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 			}
 
 			renderConfig();
+			applyTransportCapabilities();
 			renderDevices();
 			return;
 		}
@@ -1494,6 +1534,7 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 		}
 
 		renderConfig();
+		applyTransportCapabilities();
 		renderDevices();
 	}
 
@@ -1642,6 +1683,12 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 			});
 			$itemReadEpc.on("click", async () => {
 				try {
+					if (!isTransceiveSupported()) {
+						const msg = "Transceive USB transport talab qiladi (ZEBRA_TRANSPORT=usb).";
+						setItemStatus(`Read xato: ${msg}`, { indicator: "orange" });
+						frappe.msgprint({ title: "Read xatosi", message: escapeHtml(msg), indicator: "red" });
+						return;
+					}
 					$itemReadEpc.prop("disabled", true);
 					setItemStatus("EPC o‘qilmoqda...", { indicator: "gray" });
 					const tr = await zebraTransceiveZpl(buildReadCurrentEpcZpl(), { readTimeoutMs: 4000, timeoutMs: 30000 });
