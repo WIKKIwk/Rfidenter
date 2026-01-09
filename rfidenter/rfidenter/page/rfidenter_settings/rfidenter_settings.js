@@ -47,54 +47,119 @@ frappe.pages["rfidenter-settings"].on_page_load = function (wrapper) {
 	const DEFAULT_ZEBRA_URL = "http://127.0.0.1:18000";
 
 	const origin = normalizeBaseUrl(window.location.origin);
-	const ingestEndpoint = `${origin}/api/method/rfidenter.rfidenter.api.ingest_tags`;
 
 	const $body = $(`
 		<div class="rfidenter-settings">
+			<style>
+				.rfidenter-settings {
+					--rf-card-bg: var(--card-bg, #ffffff);
+					--rf-border: var(--border-color, #d1d8dd);
+					--rf-muted: var(--text-muted, #6b7280);
+					--rf-shadow: 0 10px 24px rgba(0, 0, 0, 0.08);
+				}
+				.rfidenter-settings .rfidenter-panel .panel-body { display: flex; flex-direction: column; gap: 10px; }
+				.rfidenter-settings .rfidenter-info-row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+				.rfidenter-settings .rfidenter-label { font-size: 11px; letter-spacing: 0.04em; text-transform: uppercase; color: var(--rf-muted); }
+				.rfidenter-settings .rfidenter-note { color: var(--rf-muted); font-size: 12px; }
+				.rfidenter-settings details.rfidenter-advanced summary { cursor: pointer; color: var(--rf-muted); }
+				.rfidenter-settings details.rfidenter-advanced[open] summary { margin-bottom: 6px; }
+				.rfidenter-settings .rfidenter-zebra-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+				.rfidenter-settings .rfidenter-pill-btn { border-radius: 999px; padding: 6px 14px; }
+				.rfidenter-settings .rfidenter-device-list { display: grid; gap: 12px; margin-top: 12px; }
+				.rfidenter-settings .rfidenter-device-card {
+					background: var(--rf-card-bg);
+					border: 1px solid var(--rf-border);
+					border-radius: 16px;
+					padding: 12px 14px;
+					display: flex;
+					gap: 12px;
+					align-items: stretch;
+					box-shadow: var(--rf-shadow);
+				}
+				.rfidenter-settings .rfidenter-device-icon {
+					width: 44px;
+					height: 44px;
+					border-radius: 14px;
+					display: flex;
+					align-items: center;
+					justify-content: center;
+					font-size: 16px;
+					color: #1f2937;
+					flex: 0 0 auto;
+				}
+				.rfidenter-settings .rfidenter-device-icon.zebra {
+					background: linear-gradient(135deg, #ffe3a1, #f6b48d);
+				}
+				.rfidenter-settings .rfidenter-device-icon.uhf {
+					background: linear-gradient(135deg, #c6f7e8, #b2d7ff);
+				}
+				.rfidenter-settings .rfidenter-device-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+				.rfidenter-settings .rfidenter-device-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+				.rfidenter-settings .rfidenter-device-name { font-weight: 600; }
+				.rfidenter-settings .rfidenter-device-sub { color: var(--rf-muted); font-size: 12px; }
+				.rfidenter-settings .rfidenter-device-urls a { display: inline-flex; gap: 6px; }
+				.rfidenter-settings .rfidenter-device-urls div { margin-bottom: 2px; }
+				.rfidenter-settings .rfidenter-muted { color: var(--rf-muted); font-size: 12px; }
+				.rfidenter-settings .rfidenter-status-block { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
+				.rfidenter-settings .rfidenter-status-pill {
+					display: inline-flex;
+					align-items: center;
+					gap: 6px;
+					padding: 4px 10px;
+					border-radius: 999px;
+					font-size: 12px;
+					font-weight: 600;
+					background: #eef2f7;
+					color: #1f2937;
+				}
+				.rfidenter-settings .rfidenter-status-pill.ok { background: #e8f7ec; color: #1a7f37; }
+				.rfidenter-settings .rfidenter-status-pill.off { background: #fdecec; color: #a61b1b; }
+				.rfidenter-settings .rfidenter-status-hint { color: var(--rf-muted); font-size: 11px; text-align: right; }
+				.rfidenter-settings .rfidenter-device-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+				.rfidenter-settings .rfidenter-empty-card { color: var(--rf-muted); font-size: 12px; }
+				@media (max-width: 768px) {
+					.rfidenter-settings .rfidenter-device-card { flex-direction: column; }
+					.rfidenter-settings .rfidenter-status-block { align-items: flex-start; }
+				}
+			</style>
+
 			<div class="panel panel-default">
-				<div class="panel-heading"><b>Server / Token</b></div>
+				<div class="panel-heading"><b>Token</b></div>
 				<div class="panel-body">
-					<div style="margin-bottom: 8px"><span class="text-muted">ERP URL:</span> <code class="rfidenter-url"></code></div>
-					<div style="margin-bottom: 8px"><span class="text-muted">Ingest endpoint:</span> <code class="rfidenter-endpoint"></code></div>
-					<div class="text-muted">
-						Token olish va Node konfiguratsiya uchun: <a href="/app/rfidenter-auth">Authentication</a>.
+					<div class="rfidenter-info-row">
+						<span class="rfidenter-label">ERP URL</span>
+						<code class="rfidenter-url"></code>
+					</div>
+					<div class="rfidenter-info-row">
+						<button class="btn btn-primary btn-sm rfidenter-token-generate rfidenter-pill-btn">Token yaratish</button>
+						<span class="rfidenter-muted rfidenter-token-status"></span>
+					</div>
+					<div class="rfidenter-info-row">
+						<span class="rfidenter-label">Authorization</span>
+						<code class="rfidenter-auth-line">--</code>
 					</div>
 				</div>
 			</div>
 
-			<div class="panel panel-default" style="margin-top: 12px">
+			<div class="panel panel-default rfidenter-panel" style="margin-top: 12px">
 				<div class="panel-heading"><b>Online qurilmalar</b></div>
 				<div class="panel-body">
-					<div class="text-muted" style="margin-bottom: 10px">
-						<b>UHF</b>: Node agent ERP’ga “heartbeat” yuboradi (<code>register_agent</code>).
-						<b>Zebra</b>: <code>zebra-epc-web</code> servis (USB printer) — agent mode bilan ERP’ga mustaqil ulanadi.
-					</div>
+					<div class="rfidenter-note">Ulangan qurilmalarni shu yerda ko'rasiz.</div>
 
-					<div class="flex" style="gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 10px">
-						<label class="text-muted" style="margin: 0">Zebra URL</label>
+					<div class="rfidenter-zebra-row">
+						<label class="rfidenter-label" style="margin: 0">Zebra URL</label>
 						<input class="form-control input-sm rfidenter-zebra-url" style="width: 360px" placeholder="http://127.0.0.1:18000" />
-						<button class="btn btn-default btn-sm rfidenter-zebra-test">Test</button>
-						<a class="btn btn-default btn-sm rfidenter-zebra-open" target="_blank" rel="noopener noreferrer">UI</a>
-						<span class="text-muted rfidenter-zebra-status"></span>
+						<button class="btn btn-default btn-sm rfidenter-zebra-test rfidenter-pill-btn">Tekshirish</button>
+						<a class="btn btn-default btn-sm rfidenter-zebra-open rfidenter-pill-btn" target="_blank" rel="noopener noreferrer">UI</a>
+						<span class="rfidenter-zebra-status"></span>
 					</div>
 
-					<button class="btn btn-default btn-sm rfidenter-refresh-agents">Yangilash</button>
-					<span class="text-muted rfidenter-agents-status" style="margin-left: 8px"></span>
-
-					<div class="table-responsive" style="margin-top: 10px">
-						<table class="table table-bordered table-hover">
-							<thead>
-								<tr>
-									<th style="width: 54px">Type</th>
-									<th style="width: 200px">Device</th>
-									<th>URL(lar)</th>
-									<th style="width: 180px">Status</th>
-									<th style="width: 120px">Action</th>
-								</tr>
-							</thead>
-							<tbody class="rfidenter-agents-tbody"></tbody>
-						</table>
+					<div class="rfidenter-zebra-row" style="margin-top: 6px">
+						<button class="btn btn-default btn-sm rfidenter-refresh-agents rfidenter-pill-btn">Yangilash</button>
+						<span class="rfidenter-muted rfidenter-agents-status"></span>
 					</div>
+
+					<div class="rfidenter-device-list"></div>
 				</div>
 			</div>
 		</div>
@@ -102,13 +167,15 @@ frappe.pages["rfidenter-settings"].on_page_load = function (wrapper) {
 
 	page.main.append($body);
 	setText($body.find(".rfidenter-url"), origin);
-	setText($body.find(".rfidenter-endpoint"), ingestEndpoint);
 
 	const $agentsStatus = $body.find(".rfidenter-agents-status");
-	const $agentsBody = $body.find(".rfidenter-agents-tbody");
+	const $agentsBody = $body.find(".rfidenter-device-list");
 	const $zebraUrl = $body.find(".rfidenter-zebra-url");
 	const $zebraOpen = $body.find(".rfidenter-zebra-open");
 	const $zebraStatus = $body.find(".rfidenter-zebra-status");
+	const $tokenStatus = $body.find(".rfidenter-token-status");
+	const $tokenLine = $body.find(".rfidenter-auth-line");
+	const $tokenBtn = $body.find(".rfidenter-token-generate");
 
 	const state = {
 		agents: [],
@@ -120,6 +187,11 @@ frappe.pages["rfidenter-settings"].on_page_load = function (wrapper) {
 		return String(window.localStorage.getItem(STORAGE_AUTH) || "").trim();
 	}
 
+	function renderToken(auth) {
+		const value = String(auth || "").trim();
+		setText($tokenLine, value || "--");
+	}
+
 	function getZebraBaseUrl() {
 		return normalizeBaseUrl(window.localStorage.getItem(STORAGE_ZEBRA_URL) || DEFAULT_ZEBRA_URL) || DEFAULT_ZEBRA_URL;
 	}
@@ -129,8 +201,10 @@ frappe.pages["rfidenter-settings"].on_page_load = function (wrapper) {
 	}
 
 	function iconHtml(type) {
-		if (type === "zebra") return '<i class="fa fa-print" title="Zebra"></i>';
-		return '<i class="fa fa-rss" title="UHF"></i>';
+		const kind = type === "zebra" ? "zebra" : "uhf";
+		const icon = kind === "zebra" ? "fa-print" : "fa-rss";
+		const title = kind === "zebra" ? "Zebra" : "UHF";
+		return `<span class="rfidenter-device-icon ${kind}" title="${title}"><i class="fa ${icon}"></i></span>`;
 	}
 
 	function isZebraAgent(agent) {
@@ -141,9 +215,26 @@ frappe.pages["rfidenter-settings"].on_page_load = function (wrapper) {
 		return agentId.startsWith("zebra") || version.includes("zebra");
 	}
 
-	function dotHtml(ok) {
-		const c = ok ? "#28a745" : "#d9d9d9";
-		return `<span style="display:inline-block;width:10px;height:10px;border-radius:999px;background:${c};margin-right:6px"></span>`;
+	function statusHtml({ ok, text, hint }) {
+		const cls = ok ? "ok" : "off";
+		const hintHtml = hint ? `<div class="rfidenter-status-hint">${escapeHtml(hint)}</div>` : "";
+		return `<div class="rfidenter-status-block"><span class="rfidenter-status-pill ${cls}">${escapeHtml(text)}</span>${hintHtml}</div>`;
+	}
+
+	function urlsHtml(urls, fallbackUrl) {
+		const list = Array.isArray(urls) ? urls : [];
+		const cells = list
+			.map((u) => {
+				const href = escapeHtml(String(u || ""));
+				return href ? `<div><a href="${href}/" target="_blank" rel="noopener noreferrer">${href}</a></div>` : "";
+			})
+			.join("");
+		if (cells) return cells;
+		if (fallbackUrl) {
+			const href = escapeHtml(String(fallbackUrl || ""));
+			return href ? `<div><a href="${href}/" target="_blank" rel="noopener noreferrer">${href}</a></div>` : "";
+		}
+		return '<span class="rfidenter-muted">--</span>';
 	}
 
 	async function zebraGet(path) {
@@ -212,12 +303,12 @@ frappe.pages["rfidenter-settings"].on_page_load = function (wrapper) {
 
 	async function refreshZebra({ quiet = false } = {}) {
 		let baseUrl = getZebraBaseUrl();
-		$zebraStatus.text("Tekshirilmoqda...");
+		$zebraStatus.html(statusHtml({ ok: true, text: "Tekshirilmoqda..." }));
 		try {
 			const data = await zebraGet("/api/v1/health");
 			if (data?.ok !== true) throw new Error("Zebra health not ok");
 			state.zebra = { ok: true, message: "Online", checkedAt: Date.now() };
-			$zebraStatus.text("Online");
+			$zebraStatus.html(statusHtml({ ok: true, text: "Online" }));
 			$zebraOpen.attr("href", `${baseUrl}/`);
 		} catch (e) {
 			let err = e;
@@ -230,7 +321,7 @@ frappe.pages["rfidenter-settings"].on_page_load = function (wrapper) {
 						const data2 = await zebraGet("/api/v1/health");
 						if (data2?.ok !== true) throw new Error("Zebra health not ok");
 						state.zebra = { ok: true, message: "Online", checkedAt: Date.now() };
-						$zebraStatus.text("Online");
+						$zebraStatus.html(statusHtml({ ok: true, text: "Online" }));
 						$zebraOpen.attr("href", `${baseUrl}/`);
 						err = null;
 					} catch (e2) {
@@ -243,7 +334,7 @@ frappe.pages["rfidenter-settings"].on_page_load = function (wrapper) {
 
 			if (err) {
 				state.zebra = { ok: false, message: String(err?.message || err), checkedAt: Date.now() };
-				$zebraStatus.text("Offline");
+				$zebraStatus.html(statusHtml({ ok: false, text: "Offline", hint: state.zebra.message }));
 				$zebraOpen.attr("href", `${baseUrl}/`);
 				if (!quiet) {
 					frappe.show_alert({ message: `Zebra: ${escapeHtml(err?.message || err)}`, indicator: "orange" });
@@ -253,90 +344,143 @@ frappe.pages["rfidenter-settings"].on_page_load = function (wrapper) {
 		renderDevices();
 	}
 
+	async function generateToken() {
+		try {
+			$tokenStatus.text("Yaratilmoqda...");
+			const r = await frappe.call("rfidenter.rfidenter.api.generate_user_token", { rotate: 1 });
+			if (!r || !r.message || r.message.ok !== true) throw new Error("Token yaratilmadi");
+			const auth = String(r.message.authorization || "").trim();
+			if (auth) window.localStorage.setItem(STORAGE_AUTH, auth);
+			renderToken(auth);
+			$tokenStatus.text("Tayyor");
+			window.setTimeout(() => setText($tokenStatus, ""), 2500);
+		} catch (e) {
+			$tokenStatus.text("");
+			frappe.msgprint({
+				title: "Xatolik",
+				message: escapeHtml(e?.message || e),
+				indicator: "red",
+			});
+		}
+	}
+
 	function renderDevices() {
 		$agentsBody.empty();
-		const zebraUrl = escapeHtml(getZebraBaseUrl());
+		const zebraUrl = getZebraBaseUrl();
+		const zebraUrlEsc = escapeHtml(zebraUrl);
 		const agents = Array.isArray(state.agents) ? state.agents : [];
 		const zebraAgents = agents.filter((a) => isZebraAgent(a));
 		const uhfAgents = agents.filter((a) => !isZebraAgent(a));
 
 		if (!zebraAgents.length) {
 			const zebraOk = Boolean(state.zebra.ok);
-			const zebraStatus = zebraOk
-				? "Local UI: ulangan"
-				: `Agent: offline${state.zebra.message ? ` · Local: ${state.zebra.message}` : ""}`;
+			const zebraStatus = statusHtml({
+				ok: zebraOk,
+				text: zebraOk ? "Local OK" : "Offline",
+				hint: zebraOk ? "Local UI" : state.zebra.message || "Agent offline",
+			});
 			$agentsBody.append(`
-				<tr>
-					<td>${iconHtml("zebra")}</td>
-					<td><code>Zebra</code></td>
-					<td><div><a href="${zebraUrl}/" target="_blank" rel="noopener noreferrer">${zebraUrl}</a></div></td>
-					<td>${dotHtml(false)}${escapeHtml(zebraStatus)}</td>
-					<td>
-						<a class="btn btn-primary btn-xs" href="${zebraUrl}/" target="_blank" rel="noopener noreferrer">Ochish</a>
-						<a class="btn btn-default btn-xs" href="/app/rfidenter-zebra">ERP</a>
-					</td>
-				</tr>
+				<div class="rfidenter-device-card">
+					${iconHtml("zebra")}
+					<div class="rfidenter-device-main">
+						<div class="rfidenter-device-header">
+							<div>
+								<div class="rfidenter-device-name">Zebra</div>
+								<div class="rfidenter-device-sub">USB printer (local)</div>
+							</div>
+							${zebraStatus}
+						</div>
+						<div class="rfidenter-device-urls">${urlsHtml([], zebraUrl)}</div>
+					</div>
+					<div class="rfidenter-device-actions">
+						<a class="btn btn-primary btn-xs rfidenter-pill-btn" href="${zebraUrlEsc}/" target="_blank" rel="noopener noreferrer">Ochish</a>
+						<a class="btn btn-default btn-xs rfidenter-pill-btn" href="/app/rfidenter-zebra">ERP</a>
+					</div>
+				</div>
 			`);
 		} else {
 			for (const a of zebraAgents) {
 				const device = escapeHtml(a?.device || a?.agent_id || "Zebra");
 				const urls = Array.isArray(a?.ui_urls) ? a.ui_urls : [];
-				const urlCells = urls
-					.map((u) => {
-						const href = escapeHtml(String(u || ""));
-						return href ? `<div><a href="${href}/" target="_blank" rel="noopener noreferrer">${href}</a></div>` : "";
-					})
-					.join("");
 				const bestUrl = String(urls[0] || "").trim();
-				const openHref = bestUrl ? `${escapeHtml(bestUrl)}/` : `${zebraUrl}/`;
+				const openHref = bestUrl ? `${escapeHtml(bestUrl)}/` : `${zebraUrlEsc}/`;
 				const lastSeen = fmtTime(a?.last_seen);
+				const zebraStatus = statusHtml({
+					ok: true,
+					text: lastSeen || "Online",
+					hint: "Agent heartbeat",
+				});
 				$agentsBody.append(`
-					<tr>
-						<td>${iconHtml("zebra")}</td>
-						<td><code>${device}</code></td>
-						<td>${urlCells || `<div><a href="${zebraUrl}/" target="_blank" rel="noopener noreferrer">${zebraUrl}</a></div>`}</td>
-						<td>${dotHtml(true)}${escapeHtml(lastSeen) || "Online"}</td>
-						<td>
-							<a class="btn btn-primary btn-xs" href="${openHref}" target="_blank" rel="noopener noreferrer">Ochish</a>
-							<a class="btn btn-default btn-xs" href="/app/rfidenter-zebra">ERP</a>
-						</td>
-					</tr>
+					<div class="rfidenter-device-card">
+						${iconHtml("zebra")}
+						<div class="rfidenter-device-main">
+							<div class="rfidenter-device-header">
+								<div>
+									<div class="rfidenter-device-name">${device}</div>
+									<div class="rfidenter-device-sub">Zebra agent</div>
+								</div>
+								${zebraStatus}
+							</div>
+							<div class="rfidenter-device-urls">${urlsHtml(urls, zebraUrl)}</div>
+						</div>
+						<div class="rfidenter-device-actions">
+							<a class="btn btn-primary btn-xs rfidenter-pill-btn" href="${openHref}" target="_blank" rel="noopener noreferrer">Ochish</a>
+							<a class="btn btn-default btn-xs rfidenter-pill-btn" href="/app/rfidenter-zebra">ERP</a>
+						</div>
+					</div>
 				`);
 			}
 		}
 
 		if (!uhfAgents.length) {
-			$agentsBody.append(`<tr><td colspan="5" class="text-muted">UHF agent topilmadi (Node ishlayaptimi?)</td></tr>`);
+			$agentsBody.append(`
+				<div class="rfidenter-device-card">
+					${iconHtml("uhf")}
+					<div class="rfidenter-device-main">
+						<div class="rfidenter-device-header">
+							<div>
+								<div class="rfidenter-device-name">UHF agent topilmadi</div>
+								<div class="rfidenter-device-sub">Node agent ishga tushmagan bo'lishi mumkin</div>
+							</div>
+							${statusHtml({ ok: false, text: "Offline" })}
+						</div>
+						<div class="rfidenter-device-urls"><span class="rfidenter-muted">URL yo'q</span></div>
+					</div>
+				</div>
+			`);
 			return;
 		}
 
 		for (const a of uhfAgents) {
 			const device = escapeHtml(a?.device || a?.agent_id || "");
 			const urls = Array.isArray(a?.ui_urls) ? a.ui_urls : [];
-			const urlCells = urls
-				.map((u) => {
-					const href = escapeHtml(String(u || ""));
-					return href ? `<div><a href="${href}/" target="_blank" rel="noopener noreferrer">${href}</a></div>` : "";
-				})
-				.join("");
-
 			const bestUrl = String(urls[0] || "").trim();
 			const lastSeen = fmtTime(a?.last_seen);
 			const openHref = bestUrl ? `${escapeHtml(bestUrl)}/` : "";
 			const ttlSec = state.ttlSec;
 
+			const uhfStatus = statusHtml({
+				ok: true,
+				text: lastSeen || "Online",
+				hint: ttlSec ? `TTL ${ttlSec}s` : "",
+			});
 			$agentsBody.append(`
-				<tr>
-					<td>${iconHtml("uhf")}</td>
-					<td><code>${device}</code></td>
-					<td>${urlCells || '<span class="text-muted">(yo‘q)</span>'}</td>
-					<td>
-						${dotHtml(true)}${escapeHtml(lastSeen) || "Online"}${ttlSec ? `<div class="text-muted">TTL: ${escapeHtml(ttlSec)}s</div>` : ""}
-					</td>
-					<td>
-						${openHref ? `<a class="btn btn-primary btn-xs" href="${openHref}" target="_blank" rel="noopener noreferrer">Ochish</a>` : ""}
-					</td>
-				</tr>
+				<div class="rfidenter-device-card">
+					${iconHtml("uhf")}
+					<div class="rfidenter-device-main">
+						<div class="rfidenter-device-header">
+							<div>
+								<div class="rfidenter-device-name">${device}</div>
+								<div class="rfidenter-device-sub">UHF reader</div>
+							</div>
+							${uhfStatus}
+						</div>
+						<div class="rfidenter-device-urls">${urlsHtml(urls, "")}</div>
+					</div>
+					<div class="rfidenter-device-actions">
+						${openHref ? `<a class="btn btn-primary btn-xs rfidenter-pill-btn" href="${openHref}" target="_blank" rel="noopener noreferrer">Ochish</a>` : ""}
+					</div>
+				</div>
 			`);
 		}
 	}
@@ -350,7 +494,8 @@ frappe.pages["rfidenter-settings"].on_page_load = function (wrapper) {
 			state.agents = Array.isArray(msg.agents) ? msg.agents : [];
 			state.ttlSec = Number(msg.ttl_sec || 0) || 0;
 			renderDevices();
-			$agentsStatus.text("");
+			$agentsStatus.text("Yangilandi");
+			window.setTimeout(() => setText($agentsStatus, ""), 2500);
 		} catch (e) {
 			$agentsStatus.text("");
 			state.agents = [];
@@ -389,8 +534,12 @@ frappe.pages["rfidenter-settings"].on_page_load = function (wrapper) {
 		refreshZebra({ quiet: true });
 		refreshAgents();
 	});
+	$tokenBtn.on("click", () => {
+		generateToken();
+	});
 	initZebraUi();
 	renderDevices();
+	renderToken(getStoredAuth());
 	refreshZebra({ quiet: true });
 	refreshAgents();
 };
