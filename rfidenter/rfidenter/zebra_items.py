@@ -279,6 +279,8 @@ def list_recent_tags(*, limit: Any | None = None) -> dict[str, Any]:
 			"printed_at",
 			"consumed_at",
 			"purchase_receipt",
+			"delivery_note",
+			"delivery_note_submitted_at",
 			"last_error",
 		],
 		order_by="modified desc",
@@ -394,6 +396,89 @@ def _create_stock_entry_draft_for_tag(tag: dict[str, Any], *, ant_id: int, devic
 	return se_doc.name
 
 
+def _create_delivery_note_draft_for_tag(tag: dict[str, Any], *, ant_id: int, device: str) -> str:
+	item_code = str(tag.get("item_code") or "").strip()
+	qty = float(tag.get("qty") or 0)
+	uom = str(tag.get("uom") or "").strip()
+	if not item_code or qty <= 0 or not uom:
+		raise ValueError("Tag meta noto‘g‘ri.")
+
+	settings_name = frappe.db.get_value("RFID Delivery Note Setting", {"item_code": item_code}, "name")
+	if not settings_name:
+		raise ValueError(f"Delivery note settings topilmadi: {item_code}")
+	settings = frappe.get_doc("RFID Delivery Note Setting", settings_name)
+
+	item = frappe.db.get_value("Item", item_code, ["stock_uom"], as_dict=True)
+	stock_uom = str((item or {}).get("stock_uom") or "").strip()
+	if not stock_uom:
+		raise ValueError("Item stock_uom aniqlanmadi.")
+
+	uom_value = uom or stock_uom
+	cf = _uom_conversion_factor(item_code, uom=uom_value, stock_uom=stock_uom)
+
+	values = {
+		"doctype": "Delivery Note",
+		"company": settings.company,
+		"customer": settings.customer,
+		"posting_date": frappe.utils.nowdate(),
+		"posting_time": frappe.utils.nowtime(),
+		"set_posting_time": 1,
+		"items": [
+			{
+				"item_code": item_code,
+				"qty": qty,
+				"uom": uom_value,
+				"stock_uom": stock_uom,
+				"conversion_factor": cf,
+				"warehouse": settings.warehouse,
+				"rate": 0,
+				"price_list_rate": 0,
+			}
+		],
+		"remarks": f"RFID Zebra: EPC={tag.get('epc')} ANT={ant_id} DEV={device}",
+	}
+	if getattr(settings, "selling_price_list", None):
+		values["selling_price_list"] = settings.selling_price_list
+
+	dn_doc = frappe.get_doc(values)
+	try:
+		dn_doc.set_missing_values()
+	except Exception:
+		pass
+	dn_doc.insert(ignore_permissions=True)
+	return dn_doc.name
+
+
+def _submit_delivery_note(dn_name: str, *, ant_id: int, device: str) -> None:
+	name = str(dn_name or "").strip()
+	if not name:
+		raise ValueError("Delivery Note yo‘q.")
+	if not frappe.db.exists("Delivery Note", name):
+		raise frappe.DoesNotExistError(f"Delivery Note topilmadi: {name}")
+
+	dn_doc = frappe.get_doc("Delivery Note", name)
+	if int(getattr(dn_doc, "docstatus", 0)) == 2:
+		raise frappe.ValidationError(f"Delivery Note bekor qilingan: {name}")
+
+	if int(getattr(dn_doc, "docstatus", 0)) == 0:
+		try:
+			dn_doc.set("posting_date", frappe.utils.nowdate())
+			dn_doc.set("posting_time", frappe.utils.nowtime())
+			dn_doc.set("set_posting_time", 1)
+		except Exception:
+			pass
+
+		try:
+			remarks = str(getattr(dn_doc, "remarks", "") or "")
+			append = f"RFID Zebra delivery: ANT={ant_id} DEV={device}"
+			if append not in remarks:
+				dn_doc.set("remarks", (remarks + ("\n" if remarks else "") + append)[:1000])
+		except Exception:
+			pass
+
+		dn_doc.submit()
+
+
 def _submit_stock_entry(se_name: str, *, ant_id: int, device: str) -> None:
 	name = str(se_name or "").strip()
 	if not name:
@@ -427,6 +512,45 @@ def _submit_stock_entry(se_name: str, *, ant_id: int, device: str) -> None:
 		se_doc.submit()
 
 
+def _normalize_device_key(raw: str) -> str:
+	s = str(raw or "").strip().lower()
+	if not s:
+		return "any"
+	return s[:64]
+
+
+def _load_antenna_rules() -> dict[str, dict[int, dict[str, Any]]]:
+	rows = frappe.get_all(
+		"RFID Antenna Rule",
+		fields=["device", "antenna_id", "submit_stock_entry", "create_delivery_note", "submit_delivery_note"],
+	)
+	rules: dict[str, dict[int, dict[str, Any]]] = {}
+	for row in rows:
+		device = _normalize_device_key(row.get("device") or "any")
+		ant_id = _normalize_ant(row.get("antenna_id") or 0)
+		if ant_id <= 0:
+			continue
+		entry = {
+			"device": device,
+			"antenna_id": ant_id,
+			"submit_stock_entry": bool(row.get("submit_stock_entry")),
+			"create_delivery_note": bool(row.get("create_delivery_note")),
+			"submit_delivery_note": bool(row.get("submit_delivery_note")),
+		}
+		rules.setdefault(device, {})[ant_id] = entry
+	return rules
+
+
+def _find_rule_for_ants(
+	ants: set[int], rules: dict[str, dict[int, dict[str, Any]]], device_key: str, field: str
+) -> tuple[int, dict[str, Any] | None]:
+	for ant_id in sorted(ants):
+		rule = rules.get(device_key, {}).get(ant_id) or rules.get("any", {}).get(ant_id)
+		if rule and bool(rule.get(field)):
+			return ant_id, rule
+	return 0, None
+
+
 def process_tag_reads(tags: list[dict[str, Any]], *, device: str = "") -> dict[str, Any]:
 	"""Process UHF reads: submit Stock Entry for known Zebra EPCs."""
 
@@ -434,6 +558,13 @@ def process_tag_reads(tags: list[dict[str, Any]], *, device: str = "") -> dict[s
 		return {"ok": True, "processed": 0}
 
 	require_ant_match = _consume_requires_ant_match()
+	rules = _load_antenna_rules()
+	device_key = _normalize_device_key(device)
+	device_rules = rules.get(device_key, {})
+	any_rules = rules.get("any", {})
+	has_stock_rules = any(bool(r.get("submit_stock_entry")) for r in device_rules.values()) or any(
+		bool(r.get("submit_stock_entry")) for r in any_rules.values()
+	)
 
 	# Extract unique EPCs and the set of antennas that saw them in this batch.
 	by_epc: dict[str, set[int]] = {}
@@ -456,7 +587,17 @@ def process_tag_reads(tags: list[dict[str, Any]], *, device: str = "") -> dict[s
 	# Fetch matching tags that are not yet consumed.
 	rows = frappe.get_all(
 		"RFID Zebra Tag",
-		fields=["name", "epc", "item_code", "qty", "uom", "consume_ant_id", "status", "purchase_receipt"],
+		fields=[
+			"name",
+			"epc",
+			"item_code",
+			"qty",
+			"uom",
+			"consume_ant_id",
+			"status",
+			"purchase_receipt",
+			"delivery_note",
+		],
 		filters={"epc": ["in", epcs]},
 		limit=len(epcs),
 	)
@@ -481,45 +622,106 @@ def process_tag_reads(tags: list[dict[str, Any]], *, device: str = "") -> dict[s
 
 			expected = _normalize_ant(row.get("consume_ant_id"))
 
-			if expected > 0 and expected in ants:
-				ant_id = expected
+			ant_for_stock, rule_stock = _find_rule_for_ants(ants, rules, device_key, "submit_stock_entry")
+			ant_for_delivery, rule_delivery = _find_rule_for_ants(ants, rules, device_key, "submit_delivery_note")
+
+			stock_ant = 0
+			if ant_for_stock:
+				stock_ant = ant_for_stock
+			elif has_stock_rules:
+				stock_ant = 0
+			elif expected > 0 and expected in ants:
+				stock_ant = expected
 			elif require_ant_match and expected > 0 and ants:
 				# This tag was seen on some other antenna, and strict match is enabled.
-				continue
+				stock_ant = 0
 			else:
-				# Default: allow consume from any antenna (or when antenna id isn't available).
-				ant_id = min(ants) if ants else 0
+				stock_ant = min(ants) if ants else 0
 
-			# Claim first to avoid double receipts.
-			if not _claim_for_processing(epc):
-				continue
+			stock_entry_submitted = False
+			se_name = str(row.get("purchase_receipt") or "").strip()
+
+			if stock_ant:
+				try:
+					# If Stock Entry already exists and is submitted, skip submit but allow DN creation.
+					if se_name:
+						se_docstatus = frappe.db.get_value("Stock Entry", se_name, "docstatus") or 0
+						if int(se_docstatus) == 1:
+							stock_entry_submitted = True
+						elif int(se_docstatus) == 0:
+							if _claim_for_processing(epc):
+								_submit_stock_entry(se_name, ant_id=stock_ant, device=str(device or "")[:64])
+								stock_entry_submitted = True
+					else:
+						# Claim first to avoid double receipts.
+						if _claim_for_processing(epc):
+							se_name = _create_stock_entry_draft_for_tag(
+								{
+									"epc": epc,
+									"item_code": row.get("item_code"),
+									"qty": row.get("qty"),
+									"uom": row.get("uom"),
+								},
+								ant_id=stock_ant,
+								device=str(device or "")[:64],
+							)
+							# Persist draft name even if submit fails, to prevent duplicates on retries.
+							frappe.db.set_value(
+								"RFID Zebra Tag",
+								epc,
+								{"purchase_receipt": se_name},
+								update_modified=True,
+							)
+							_submit_stock_entry(se_name, ant_id=stock_ant, device=str(device or "")[:64])
+							stock_entry_submitted = True
+
+					if stock_entry_submitted:
+						frappe.db.set_value(
+							"RFID Zebra Tag",
+							epc,
+							{
+								"status": "Consumed",
+								"purchase_receipt": se_name,
+								"consumed_at": frappe.utils.now_datetime(),
+								"consumed_device": str(device or "")[:64],
+								"last_error": "",
+							},
+							update_modified=True,
+						)
+						processed += 1
+				except Exception as exc:
+					_set_error(epc, str(exc))
 
 			try:
-				# Re-read after claim to avoid races with print callback (mark_tag_printed).
-				se_name = str(frappe.db.get_value("RFID Zebra Tag", epc, "purchase_receipt") or "").strip()
-				if not se_name:
-					se_name = _create_stock_entry_draft_for_tag(
+				delivery_note = str(row.get("delivery_note") or "").strip()
+				create_dn = bool(rule_stock and rule_stock.get("create_delivery_note"))
+				if stock_entry_submitted and create_dn and not delivery_note:
+					delivery_note = _create_delivery_note_draft_for_tag(
 						{"epc": epc, "item_code": row.get("item_code"), "qty": row.get("qty"), "uom": row.get("uom")},
-						ant_id=ant_id,
+						ant_id=stock_ant or ant_for_stock or 0,
 						device=str(device or "")[:64],
 					)
-					# Persist draft name even if submit fails, to prevent duplicates on retries.
-					frappe.db.set_value("RFID Zebra Tag", epc, {"purchase_receipt": se_name}, update_modified=True)
+					frappe.db.set_value(
+						"RFID Zebra Tag",
+						epc,
+						{"delivery_note": delivery_note, "last_error": ""},
+						update_modified=True,
+					)
 
-				_submit_stock_entry(se_name, ant_id=ant_id, device=str(device or "")[:64])
-				frappe.db.set_value(
-					"RFID Zebra Tag",
-					epc,
-					{
-						"status": "Consumed",
-						"purchase_receipt": se_name,
-						"consumed_at": frappe.utils.now_datetime(),
-						"consumed_device": str(device or "")[:64],
-						"last_error": "",
-					},
-					update_modified=True,
-				)
-				processed += 1
+				if ant_for_delivery and delivery_note:
+					dn_docstatus = frappe.db.get_value("Delivery Note", delivery_note, "docstatus") or 0
+					if int(dn_docstatus) == 0:
+						_submit_delivery_note(delivery_note, ant_id=ant_for_delivery, device=str(device or "")[:64])
+						frappe.db.set_value(
+							"RFID Zebra Tag",
+							epc,
+							{
+								"delivery_note_submitted_at": frappe.utils.now_datetime(),
+								"delivery_note_device": str(device or "")[:64],
+								"last_error": "",
+							},
+							update_modified=True,
+						)
 			except Exception as exc:
 				_set_error(epc, str(exc))
 	except Exception:

@@ -18,6 +18,8 @@ AGENT_REPLY_PREFIX = "rfidenter_agent_reply:"
 SEEN_PREFIX = "rfidenter_seen:"
 SCALE_CACHE_PREFIX = "rfidenter_scale_weight:"
 SCALE_LAST_KEY = "rfidenter_scale_last"
+ANT_STATS_INDEX = "rfidenter_ant_stats_index"
+ANT_STATS_PREFIX = "rfidenter_ant_stats:"
 
 
 def _get_site_token() -> str:
@@ -114,6 +116,60 @@ def _dedup_ttl_sec() -> int:
 	except Exception:
 		ttl = 86400
 	return max(60, min(30 * 86400, ttl))
+
+
+def _antenna_ttl_sec() -> int:
+	try:
+		site_conf = frappe.get_site_config(silent=True) or {}
+	except Exception:
+		site_conf = {}
+
+	raw = site_conf.get("rfidenter_antenna_ttl_sec") or frappe.conf.get("rfidenter_antenna_ttl_sec") or 600
+	try:
+		ttl = int(raw)
+	except Exception:
+		ttl = 600
+	return max(30, min(24 * 3600, ttl))
+
+
+def _update_antenna_stats(tags: list[dict[str, Any]], device: str, ts: int | None = None) -> None:
+	if not tags:
+		return
+
+	device_key = _sanitize_agent_id(device) or "unknown"
+	now_ms = int(ts) if ts else _now_ms()
+	ttl_sec = _antenna_ttl_sec()
+
+	cache = frappe.cache()
+	payload = cache.get_value(f"{ANT_STATS_PREFIX}{device_key}") or {}
+	ants = payload.get("ants") if isinstance(payload, dict) else None
+	if not isinstance(ants, dict):
+		ants = {}
+
+	for tag in tags:
+		if not isinstance(tag, dict):
+			continue
+		ant_id = _normalize_ant(tag.get("antId") or tag.get("ANT") or 0)
+		if ant_id <= 0:
+			continue
+		count = _normalize_count(tag.get("count") or tag.get("reads") or tag.get("readCount") or 1)
+		key = str(ant_id)
+		prev = ants.get(key) if isinstance(ants, dict) else None
+		if not isinstance(prev, dict):
+			prev = {"ant_id": ant_id, "reads": 0, "last_seen": 0}
+		prev["ant_id"] = ant_id
+		prev["reads"] = int(prev.get("reads") or 0) + count
+		prev["last_seen"] = now_ms
+		ants[key] = prev
+
+	payload = {
+		"device": device,
+		"device_key": device_key,
+		"last_seen": now_ms,
+		"ants": ants,
+	}
+	cache.set_value(f"{ANT_STATS_PREFIX}{device_key}", payload, expires_in_sec=ttl_sec, shared=False)
+	cache.hset(ANT_STATS_INDEX, device_key, now_ms)
 
 
 def _normalize_hex(raw: Any) -> str:
@@ -344,6 +400,10 @@ def ingest_tags(**kwargs) -> dict[str, Any]:
 				prev[field] = tag.get(field)
 
 	agg_tags = list(agg.values())
+	try:
+		_update_antenna_stats(agg_tags, device=device, ts=ts)
+	except Exception:
+		pass
 
 	saved_count = 0
 	saved_updated = False
@@ -385,6 +445,128 @@ def ingest_tags(**kwargs) -> dict[str, Any]:
 		"saved_count": saved_count,
 		"zebra_processed": zebra_processed,
 	}
+
+
+@frappe.whitelist()
+def list_antenna_stats() -> dict[str, Any]:
+	if not has_rfidenter_access():
+		frappe.throw("RFIDenter: sizda RFIDer roli yo‘q.", frappe.PermissionError)
+
+	ttl_sec = _antenna_ttl_sec()
+	cutoff = _now_ms() - (ttl_sec * 1000)
+	cache = frappe.cache()
+	raw = cache.hgetall(ANT_STATS_INDEX) or {}
+
+	antennas: list[dict[str, Any]] = []
+	stale_keys: list[str] = []
+	for key, ts in raw.items():
+		device_key = key.decode() if isinstance(key, (bytes, bytearray)) else str(key)
+		try:
+			last_seen = int(ts or 0)
+		except Exception:
+			last_seen = 0
+		if last_seen < cutoff:
+			stale_keys.append(device_key)
+			continue
+
+		payload = cache.get_value(f"{ANT_STATS_PREFIX}{device_key}") or {}
+		if not isinstance(payload, dict):
+			stale_keys.append(device_key)
+			continue
+
+		device = str(payload.get("device") or device_key).strip() or device_key
+		ants = payload.get("ants") or {}
+		if not isinstance(ants, dict):
+			continue
+
+		for ant in ants.values():
+			if not isinstance(ant, dict):
+				continue
+			ant_id = _normalize_ant(ant.get("ant_id"))
+			if ant_id <= 0:
+				continue
+			antennas.append(
+				{
+					"device": device,
+					"device_key": device_key,
+					"ant_id": ant_id,
+					"last_seen": ant.get("last_seen") or last_seen,
+					"reads": ant.get("reads") or 0,
+				}
+			)
+
+	for key in stale_keys:
+		try:
+			cache.hdel(ANT_STATS_INDEX, key)
+		except Exception:
+			pass
+
+	antennas.sort(key=lambda row: (row.get("device") or "", int(row.get("ant_id") or 0)))
+	return {"ok": True, "ttl_sec": ttl_sec, "antennas": antennas}
+
+
+@frappe.whitelist()
+def list_antenna_rules() -> dict[str, Any]:
+	if not has_rfidenter_access():
+		frappe.throw("RFIDenter: sizda RFIDer roli yo‘q.", frappe.PermissionError)
+
+	rows = frappe.get_all(
+		"RFID Antenna Rule",
+		fields=["name", "device", "antenna_id", "submit_stock_entry", "create_delivery_note", "submit_delivery_note"],
+		order_by="device asc, antenna_id asc",
+	)
+	return {"ok": True, "rules": rows}
+
+
+@frappe.whitelist()
+def upsert_antenna_rule(
+	device: str = "",
+	antenna_id: Any | None = None,
+	submit_stock_entry: Any | None = None,
+	create_delivery_note: Any | None = None,
+	submit_delivery_note: Any | None = None,
+) -> dict[str, Any]:
+	if not has_rfidenter_access():
+		frappe.throw("RFIDenter: sizda RFIDer roli yo‘q.", frappe.PermissionError)
+
+	device_norm = str(device or "").strip() or "any"
+	ant = _normalize_ant(antenna_id)
+	if ant <= 0:
+		frappe.throw("Antenna port noto‘g‘ri.", frappe.ValidationError)
+
+	submit_stock = bool(_normalize_bool(submit_stock_entry))
+	create_dn = bool(_normalize_bool(create_delivery_note)) if submit_stock else False
+	submit_dn = bool(_normalize_bool(submit_delivery_note))
+
+	name = frappe.db.get_value("RFID Antenna Rule", {"device": device_norm, "antenna_id": ant}, "name")
+	values = {
+		"device": device_norm,
+		"antenna_id": ant,
+		"submit_stock_entry": int(submit_stock),
+		"create_delivery_note": int(create_dn),
+		"submit_delivery_note": int(submit_dn),
+	}
+	if name:
+		frappe.db.set_value("RFID Antenna Rule", name, values, update_modified=True)
+		return {"ok": True, "name": name, "rule": values}
+
+	doc = frappe.get_doc({"doctype": "RFID Antenna Rule", **values})
+	doc.insert(ignore_permissions=True)
+	return {"ok": True, "name": doc.name, "rule": values}
+
+
+@frappe.whitelist()
+def list_delivery_note_settings() -> dict[str, Any]:
+	if not has_rfidenter_access():
+		frappe.throw("RFIDenter: sizda RFIDer roli yo‘q.", frappe.PermissionError)
+
+	rows = frappe.get_all(
+		"RFID Delivery Note Setting",
+		fields=["name", "item_code", "company", "customer", "warehouse", "selling_price_list"],
+		order_by="modified desc",
+		limit=500,
+	)
+	return {"ok": True, "items": rows}
 
 @frappe.whitelist(allow_guest=True)
 def ingest_scale_weight(**kwargs) -> dict[str, Any]:
