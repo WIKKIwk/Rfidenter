@@ -184,6 +184,12 @@ frappe.pages["rfidenter-flow"].on_page_load = function (wrapper) {
 					letter-spacing: 0.04em;
 					color: var(--rf-muted);
 				}
+				.rfidenter-flow .rf-flow-rule-actions {
+					display: flex;
+					gap: 8px;
+					align-items: center;
+					flex-wrap: wrap;
+				}
 				.rfidenter-flow .rf-flow-rule-table {
 					width: 100%;
 					border-collapse: collapse;
@@ -308,7 +314,10 @@ frappe.pages["rfidenter-flow"].on_page_load = function (wrapper) {
 							</label>
 						</div>
 						<div>
-							<button class="btn btn-primary btn-sm rf-flow-new-save">Saqlash</button>
+							<div class="rf-flow-rule-actions">
+								<button class="btn btn-primary btn-sm rf-flow-new-save">Saqlash</button>
+								<button class="btn btn-default btn-sm rf-flow-new-save-next">Saqlash va keyingisini sozlash</button>
+							</div>
 						</div>
 					</div>
 
@@ -622,6 +631,14 @@ frappe.pages["rfidenter-flow"].on_page_load = function (wrapper) {
 	});
 
 	$body.on("click", ".rf-flow-new-save", function () {
+		handleNewRuleSave({ advance: false, button: $(this) });
+	});
+
+	$body.on("click", ".rf-flow-new-save-next", function () {
+		handleNewRuleSave({ advance: true, button: $(this) });
+	});
+
+	function handleNewRuleSave({ advance, button }) {
 		const deviceRaw = $newDevice.val() || "any";
 		const ant = normalizeAnt($newAnt.val());
 		if (!ant) {
@@ -632,8 +649,7 @@ frappe.pages["rfidenter-flow"].on_page_load = function (wrapper) {
 		const createDn = $newDn.prop("checked");
 		const submitDn = $newDnSubmit.prop("checked");
 
-		const $btn = $(this);
-		$btn.prop("disabled", true);
+		button.prop("disabled", true);
 		apiCall("rfidenter.rfidenter.api.upsert_antenna_rule", {
 			device: deviceRaw,
 			antenna_id: ant,
@@ -643,16 +659,21 @@ frappe.pages["rfidenter-flow"].on_page_load = function (wrapper) {
 		})
 			.then(() => {
 				frappe.show_alert({ message: "Yangi qoida qo'shildi", indicator: "green" });
-				$newAnt.val("");
+				if (advance) {
+					$newAnt.val(String(ant + 1));
+					$newAnt.trigger("focus");
+				} else {
+					$newAnt.val("");
+				}
 			})
 			.then(() => fetchRules())
 			.then(() => {
 				renderAll();
 			})
 			.finally(() => {
-				$btn.prop("disabled", false);
+				button.prop("disabled", false);
 			});
-	});
+	}
 
 	$body.on("click", ".rf-flow-open-rules", () => {
 		frappe.set_route("List", "RFID Antenna Rule");
