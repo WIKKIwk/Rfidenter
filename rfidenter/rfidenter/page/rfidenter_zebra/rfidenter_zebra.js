@@ -323,6 +323,22 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 						align-items: center;
 						gap: 8px;
 						font-weight: 600;
+						line-height: 1.2;
+					}
+					.rfidenter-zebra .rfz-card-title .rfz-icon {
+						width: 22px;
+						height: 22px;
+						display: inline-flex;
+						align-items: center;
+						justify-content: center;
+						border-radius: 7px;
+						background: #eef2f7;
+						color: #1f2937;
+						flex: 0 0 auto;
+					}
+					.rfidenter-zebra .rfz-card-title .rfz-icon i {
+						position: static !important;
+						margin: 0;
 					}
 					.rfidenter-zebra .rfz-pill {
 						display: inline-flex;
@@ -426,7 +442,7 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 
 				<div class="panel panel-default rfz-card">
 					<div class="panel-heading">
-						<div class="rfz-card-title"><i class="fa fa-plug"></i> Ulanish</div>
+						<div class="rfz-card-title"><span class="rfz-icon"><i class="fa fa-plug"></i></span> Ulanish</div>
 						<span class="rfz-pill orange rfidenter-zebra-status">Tekshirilmoqda...</span>
 					</div>
 					<div class="panel-body">
@@ -454,7 +470,7 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 
 				<div class="panel panel-default rfz-card" style="margin-top: 12px">
 					<div class="panel-heading">
-						<div class="rfz-card-title"><i class="fa fa-tag"></i> Print</div>
+						<div class="rfz-card-title"><span class="rfz-icon"><i class="fa fa-tag"></i></span> Print</div>
 						<button class="btn btn-default btn-xs rfz-open-settings" title="Item receipt settings">
 							<i class="fa fa-gear"></i>
 						</button>
@@ -537,7 +553,7 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 				<details class="rfz-advanced">
 					<summary>Qo‘shimcha</summary>
 					<div class="panel panel-default rfz-card" style="margin-top: 12px">
-						<div class="panel-heading"><div class="rfz-card-title"><i class="fa fa-print"></i> Printer</div></div>
+						<div class="panel-heading"><div class="rfz-card-title"><span class="rfz-icon"><i class="fa fa-print"></i></span> Printer</div></div>
 						<div class="panel-body">
 							<div class="text-muted" style="margin-bottom: 8px">Config: <code class="rfidenter-zebra-config"></code></div>
 							<div class="table-responsive">
@@ -555,7 +571,7 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 					</div>
 
 					<div class="panel panel-default rfz-card" style="margin-top: 12px">
-						<div class="panel-heading"><div class="rfz-card-title"><i class="fa fa-qrcode"></i> Encode</div></div>
+						<div class="panel-heading"><div class="rfz-card-title"><span class="rfz-icon"><i class="fa fa-qrcode"></i></span> Encode</div></div>
 						<div class="panel-body">
 					<div class="flex" style="gap: 14px; align-items: center; flex-wrap: wrap; margin-bottom: 12px">
 						<label class="radio-inline" style="margin: 0">
