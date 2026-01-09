@@ -300,22 +300,15 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 			<div class="rfidenter-zebra">
 				<style>
 					.rfidenter-zebra {
-						--rf-surface: #f7f4ec;
 						--rf-card-bg: var(--card-bg, #ffffff);
 						--rf-border: var(--border-color, #d1d8dd);
 						--rf-muted: var(--text-muted, #6b7280);
-						--rf-accent: #3c5a2f;
-						--rf-accent-soft: #e6f1e1;
-						--rf-shadow: 0 16px 32px rgba(33, 32, 22, 0.12);
-						--rf-ring: rgba(60, 90, 47, 0.18);
-						font-family: "IBM Plex Sans", "Noto Sans", "Segoe UI", sans-serif;
-						color: #1c2217;
-						background:
-							radial-gradient(1200px circle at 8% -10%, #fff1cc 0, transparent 55%),
-							radial-gradient(1000px circle at 92% -15%, #e2f3ea 0, transparent 60%),
-							var(--rf-surface);
-						padding: 16px;
-						border-radius: 18px;
+						--rf-accent: var(--primary, #3c5a2f);
+						--rf-shadow: var(--shadow-sm, 0 6px 16px rgba(0, 0, 0, 0.08));
+						font-family: inherit;
+						color: var(--text-color, #1f2937);
+						background: transparent;
+						padding: 8px;
 					}
 					.rfidenter-zebra,
 					.rfidenter-zebra * {
@@ -323,8 +316,8 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 					}
 					.rfidenter-zebra .rfz-card {
 						background: var(--rf-card-bg);
-						border: 1px solid #d6d2c6;
-						border-radius: 18px;
+						border: 1px solid var(--rf-border);
+						border-radius: 16px;
 						box-shadow: var(--rf-shadow);
 						overflow: hidden;
 						animation: rfz-fade-up 0.35s ease both;
@@ -336,8 +329,8 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 						gap: 12px;
 						flex-wrap: wrap;
 						padding: 12px 16px;
-						background: linear-gradient(90deg, #fbf8ef, #f6f2e8);
-						border-bottom: 1px solid #e0dccf;
+						background: transparent;
+						border-bottom: 1px solid var(--rf-border);
 					}
 					.rfidenter-zebra .rfz-card .panel-heading > * {
 						min-width: 0;
@@ -361,9 +354,9 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 						align-items: center;
 						justify-content: center;
 						border-radius: 9px;
-						background: linear-gradient(135deg, #f2ecd7, #d7ead3);
-						color: #1f2a1c;
-						box-shadow: inset 0 0 0 1px rgba(31, 42, 28, 0.08);
+						background: var(--control-bg, var(--rf-card-bg));
+						color: inherit;
+						border: 1px solid var(--rf-border);
 						flex: 0 0 auto;
 					}
 					.rfidenter-zebra .rfz-card-title .rfz-icon i {
@@ -379,31 +372,32 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 						font-size: 11px;
 						font-weight: 700;
 						letter-spacing: 0.2px;
-						background: #f4efe2;
-						color: #2a2f20;
-						border: 1px solid #e2dccb;
+						background: var(--control-bg, var(--rf-card-bg));
+						color: inherit;
+						border: 1px solid var(--rf-border);
 					}
-					.rfidenter-zebra .rfidenter-zebra-status.green { background: #e8f7ec; color: #1a7f37; }
-					.rfidenter-zebra .rfidenter-zebra-status.red { background: #fdecec; color: #a61b1b; }
-					.rfidenter-zebra .rfidenter-zebra-status.orange { background: #fff1dd; color: #92400e; }
-					.rfidenter-zebra .rfidenter-zebra-status.gray { background: #eef2f7; color: #6b7280; }
+					.rfidenter-zebra .rfidenter-zebra-status {
+						background: var(--control-bg, var(--rf-card-bg));
+						color: inherit;
+						border: 1px solid var(--rf-border);
+					}
 					.rfidenter-zebra .form-control {
 						border-radius: 12px;
-						border: 1px solid #d7d2c4;
-						background: #f7f6f1;
-						box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.6);
+						border: 1px solid var(--control-border-color, var(--rf-border));
+						background: var(--control-bg, var(--rf-card-bg));
+						box-shadow: none;
 						transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
 					}
 					.rfidenter-zebra .form-control:focus {
-						border-color: var(--rf-accent);
-						box-shadow: 0 0 0 3px var(--rf-ring);
+						border-color: var(--control-border-color, var(--rf-border));
+						box-shadow: none;
 					}
 					.rfidenter-zebra label {
 						font-size: 11px;
 						font-weight: 700;
 						letter-spacing: 0.08em;
 						text-transform: uppercase;
-						color: #5c6255;
+						color: var(--rf-muted);
 					}
 					.rfidenter-zebra .rfz-control .help-box,
 					.rfidenter-zebra .rfz-control .help-block,
@@ -443,39 +437,24 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 						align-items: center;
 						gap: 10px;
 						flex-wrap: wrap;
-						background: #f4f1e6;
-						border: 1px solid #e2dccb;
+						background: transparent;
+						border: 1px solid var(--rf-border);
 						border-radius: 16px;
 						padding: 8px;
 					}
 					.rfidenter-zebra .rfz-actions .btn {
 						border-radius: 999px;
 						padding: 7px 16px;
-						border: 1px solid #d6d2c6;
-						box-shadow: 0 6px 16px rgba(40, 40, 28, 0.08);
+						border: 1px solid var(--rf-border);
+						box-shadow: none;
 						transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
 					}
 					.rfidenter-zebra .rfz-actions .btn:hover {
 						transform: translateY(-1px);
-						box-shadow: 0 10px 20px rgba(40, 40, 28, 0.12);
+						box-shadow: none;
 					}
 					.rfidenter-zebra .rfz-actions .btn i {
 						margin-right: 6px;
-					}
-					.rfidenter-zebra .btn-primary {
-						background: var(--rf-accent);
-						border-color: var(--rf-accent);
-						color: #f8fbf4;
-					}
-					.rfidenter-zebra .btn-primary:hover,
-					.rfidenter-zebra .btn-primary:focus {
-						background: #2f4626;
-						border-color: #2f4626;
-					}
-					.rfidenter-zebra .btn-default {
-						background: #f4efe2;
-						border-color: #d6d2c6;
-						color: #2b3124;
 					}
 					.rfidenter-zebra .rfz-actions .rfz-pill {
 						padding: 6px 10px;
@@ -489,9 +468,9 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 						justify-content: space-between;
 						gap: 12px;
 						padding: 10px 12px;
-						border: 1px solid #e1dccf;
+						border: 1px solid var(--rf-border);
 						border-radius: 16px;
-						background: linear-gradient(135deg, #f9f7f0, #f2f7f0);
+						background: var(--control-bg, var(--rf-card-bg));
 					}
 					.rfidenter-zebra .rfz-scale-left {
 						display: flex;
@@ -505,8 +484,9 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 						display: flex;
 						align-items: center;
 						justify-content: center;
-						background: linear-gradient(135deg, #dbe9ff, #d7f5d8);
-						color: #1f2937;
+						background: var(--control-bg, var(--rf-card-bg));
+						border: 1px solid var(--rf-border);
+						color: inherit;
 					}
 					.rfidenter-zebra .rfz-table {
 						margin-top: 12px;
@@ -525,7 +505,7 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 						font-size: 13px;
 					}
 					.rfidenter-zebra .rfz-table thead th {
-						background: #f5f2e8;
+						background: var(--table-header-bg, var(--control-bg, transparent));
 						font-weight: 700;
 					}
 					.rfidenter-zebra .rfz-scale-value {
@@ -553,8 +533,7 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 					}
 					@media (max-width: 980px) {
 						.rfidenter-zebra {
-							padding: 12px;
-							border-radius: 14px;
+							padding: 8px;
 						}
 						.rfidenter-zebra .rfz-card .panel-heading,
 						.rfidenter-zebra .rfz-card .panel-body {
