@@ -299,16 +299,46 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 		const $body = $(`
 			<div class="rfidenter-zebra">
 				<style>
-					.rfidenter-zebra .rfz-topbar {
+					.rfidenter-zebra {
+						--rf-card-bg: var(--card-bg, #ffffff);
+						--rf-border: var(--border-color, #d1d8dd);
+						--rf-muted: var(--text-muted, #6b7280);
+						--rf-shadow: 0 10px 24px rgba(0, 0, 0, 0.08);
+					}
+					.rfidenter-zebra .rfz-card {
+						background: var(--rf-card-bg);
+						border: 1px solid var(--rf-border);
+						border-radius: 16px;
+						box-shadow: var(--rf-shadow);
+						overflow: hidden;
+					}
+					.rfidenter-zebra .rfz-card .panel-heading {
 						display: flex;
 						align-items: center;
-						justify-content: flex-end;
-						margin-bottom: 12px;
+						justify-content: space-between;
+						gap: 12px;
 					}
-					.rfidenter-zebra .rfz-topbar .indicator-pill {
+					.rfidenter-zebra .rfz-card-title {
+						display: inline-flex;
+						align-items: center;
+						gap: 8px;
+						font-weight: 600;
+					}
+					.rfidenter-zebra .rfz-pill {
+						display: inline-flex;
+						align-items: center;
+						gap: 6px;
+						padding: 6px 12px;
+						border-radius: 999px;
 						font-size: 12px;
-						padding: 4px 10px;
+						font-weight: 600;
+						background: #eef2f7;
+						color: #1f2937;
 					}
+					.rfidenter-zebra .rfidenter-zebra-status.green { background: #e8f7ec; color: #1a7f37; }
+					.rfidenter-zebra .rfidenter-zebra-status.red { background: #fdecec; color: #a61b1b; }
+					.rfidenter-zebra .rfidenter-zebra-status.orange { background: #fff1dd; color: #92400e; }
+					.rfidenter-zebra .rfidenter-zebra-status.gray { background: #eef2f7; color: #6b7280; }
 					.rfidenter-zebra .rfz-control .help-box,
 					.rfidenter-zebra .rfz-control .help-block,
 					.rfidenter-zebra .rfz-control .control-help {
@@ -329,10 +359,50 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 						gap: 10px;
 						flex-wrap: wrap;
 					}
+					.rfidenter-zebra .rfz-actions .btn {
+						border-radius: 999px;
+						padding: 6px 14px;
+					}
+					.rfidenter-zebra .rfz-actions .btn i {
+						margin-right: 6px;
+					}
+					.rfidenter-zebra .rfz-actions .rfz-pill {
+						padding: 6px 10px;
+					}
+					.rfidenter-zebra .rfz-queue:empty { display: none; }
+					.rfidenter-zebra .rfz-status:empty { display: none; }
+					.rfidenter-zebra .rfz-scale {
+						display: flex;
+						align-items: center;
+						justify-content: space-between;
+						gap: 12px;
+						padding: 10px 12px;
+						border: 1px solid var(--rf-border);
+						border-radius: 14px;
+						background: #f8fafc;
+					}
+					.rfidenter-zebra .rfz-scale-left {
+						display: flex;
+						align-items: center;
+						gap: 10px;
+					}
+					.rfidenter-zebra .rfz-scale-icon {
+						width: 40px;
+						height: 40px;
+						border-radius: 12px;
+						display: flex;
+						align-items: center;
+						justify-content: center;
+						background: linear-gradient(135deg, #cfe7ff, #d7f5d8);
+						color: #1f2937;
+					}
 					.rfidenter-zebra .rfz-table {
 						margin-top: 12px;
 						max-height: 320px;
 						overflow: auto;
+						border: 1px solid var(--rf-border);
+						border-radius: 14px;
+						background: var(--rf-card-bg);
 					}
 					.rfidenter-zebra .rfz-scale-value {
 						font-weight: 600;
@@ -341,11 +411,12 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 					}
 					.rfidenter-zebra .rfz-scale-meta {
 						font-size: 12px;
+						color: var(--rf-muted);
 					}
 					.rfidenter-zebra details.rfz-advanced > summary {
 						cursor: pointer;
 						user-select: none;
-						color: #6c7680;
+						color: var(--rf-muted);
 						margin-top: 12px;
 					}
 					.rfidenter-zebra details.rfz-advanced[open] > summary {
@@ -353,49 +424,45 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 					}
 				</style>
 
-				<div class="rfz-topbar">
-					<span class="indicator-pill orange rfidenter-zebra-status">Tekshirilmoqda...</span>
-				</div>
-
-				<div class="panel panel-default">
-					<div class="panel-heading"><b>Ulanish</b></div>
+				<div class="panel panel-default rfz-card">
+					<div class="panel-heading">
+						<div class="rfz-card-title"><i class="fa fa-plug"></i> Ulanish</div>
+						<span class="rfz-pill orange rfidenter-zebra-status">Tekshirilmoqda...</span>
+					</div>
 					<div class="panel-body">
 					<div class="flex" style="gap: 10px; align-items: center; flex-wrap: wrap">
-						<label class="text-muted" style="margin: 0">Mode</label>
-						<select class="form-control input-sm rfidenter-conn-mode" style="width: 220px">
-							<option value="agent">Agent (ERP orqali)</option>
+						<select class="form-control input-sm rfidenter-conn-mode" style="width: 200px">
+							<option value="agent">Agent</option>
 							<option value="local">Local URL</option>
 						</select>
 
 						<div class="rfidenter-conn-agent flex" style="gap: 10px; align-items: center; flex-wrap: wrap">
-							<label class="text-muted" style="margin: 0">Zebra agent</label>
 							<select class="form-control input-sm rfidenter-agent" style="width: 360px"></select>
-							<button class="btn btn-default btn-sm rfidenter-agent-refresh">Yangilash</button>
+							<button class="btn btn-default btn-sm rfidenter-agent-refresh"><i class="fa fa-refresh"></i></button>
 							<span class="text-muted rfidenter-agent-hint"></span>
 						</div>
 
 						<div class="rfidenter-conn-local flex" style="gap: 10px; align-items: center; flex-wrap: wrap">
-							<label class="text-muted" style="margin: 0">Zebra URL</label>
 							<input class="form-control input-sm rfidenter-zebra-url" style="width: 360px" placeholder="http://127.0.0.1:18000" />
-							<button class="btn btn-default btn-sm rfidenter-zebra-refresh">Yangilash</button>
+							<button class="btn btn-default btn-sm rfidenter-zebra-refresh"><i class="fa fa-refresh"></i></button>
 						</div>
 
-						<a class="btn btn-default btn-sm rfidenter-zebra-open" target="_blank" rel="noopener noreferrer">UI</a>
+						<a class="btn btn-default btn-sm rfidenter-zebra-open" target="_blank" rel="noopener noreferrer"><i class="fa fa-external-link"></i> UI</a>
 					</div>
 					</div>
 				</div>
 
-				<div class="panel panel-default" style="margin-top: 12px">
+				<div class="panel panel-default rfz-card" style="margin-top: 12px">
 					<div class="panel-heading">
-						<div class="flex" style="align-items:center; justify-content: space-between; gap: 10px; flex-wrap: wrap">
-								<b>Mahsulot → RFID Print → Stock Entry</b>
-							<button class="btn btn-default btn-xs rfz-open-settings">Item receipt settings</button>
-						</div>
+						<div class="rfz-card-title"><i class="fa fa-tag"></i> Print</div>
+						<button class="btn btn-default btn-xs rfz-open-settings" title="Item receipt settings">
+							<i class="fa fa-gear"></i>
+						</button>
 					</div>
 					<div class="panel-body">
 						<div class="row rfz-form-row">
 							<div class="col-md-6 rfz-control">
-								<label class="text-muted">Kategoriya (Item Group)</label>
+								<label class="text-muted">Kategoriya</label>
 								<div class="rfz-item-group"></div>
 							</div>
 							<div class="col-md-6 rfz-control">
@@ -414,27 +481,31 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 								<div class="rfz-uom"></div>
 							</div>
 							<div class="col-md-3 rfz-control">
-								<label class="text-muted">Antenna (consume)</label>
+								<label class="text-muted">Antenna</label>
 								<div class="rfz-ant"></div>
 							</div>
 								<div class="col-md-3">
 									<div class="rfz-actions" style="margin-top: 18px">
-										<button class="btn btn-primary btn-sm rfz-print">Print</button>
-										<button class="btn btn-default btn-sm rfz-read-epc" title="Tag ichidagi EPC’ni o‘qish">Read EPC</button>
-										<button class="btn btn-danger btn-sm rfz-stop" title="Printer navbatini to‘xtatish (~JA)">Stop</button>
-										<button class="btn btn-default btn-sm rfz-calibrate" title="Media kalibratsiya (~JC)">Calibrate</button>
-										<span class="text-muted rfz-status"></span>
-										<span class="text-muted rfz-queue"></span>
+										<button class="btn btn-primary btn-sm rfz-print"><i class="fa fa-bolt"></i> Print</button>
+										<button class="btn btn-default btn-sm rfz-read-epc" title="Tag EPC o‘qish"><i class="fa fa-eye"></i></button>
+										<button class="btn btn-default btn-sm rfz-stop" title="Navbatni to‘xtatish"><i class="fa fa-stop"></i></button>
+										<button class="btn btn-default btn-sm rfz-calibrate" title="Kalibratsiya"><i class="fa fa-sliders"></i></button>
+										<span class="rfz-pill rfz-status"></span>
+										<span class="rfz-pill rfz-queue"></span>
 									</div>
 								</div>
 							</div>
 
 						<div class="row rfz-form-row" style="margin-top: 6px">
 							<div class="col-md-12">
-								<div class="flex" style="gap: 10px; align-items: center; flex-wrap: wrap">
-									<span class="text-muted">Tarozi</span>
-									<span class="rfz-scale-value">--</span>
-									<span class="text-muted rfz-scale-meta">Ulanmagan</span>
+								<div class="rfz-scale">
+									<div class="rfz-scale-left">
+										<span class="rfz-scale-icon"><i class="fa fa-balance-scale"></i></span>
+										<div>
+											<div class="rfz-scale-value">--</div>
+											<div class="rfz-scale-meta">Ulanmagan</div>
+										</div>
+									</div>
 									<label class="checkbox-inline rfz-scale-autofill" style="margin: 0">
 										<input type="checkbox" checked /> Auto Qty/UOM
 									</label>
@@ -465,8 +536,8 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 
 				<details class="rfz-advanced">
 					<summary>Qo‘shimcha</summary>
-					<div class="panel panel-default" style="margin-top: 12px">
-						<div class="panel-heading"><b>Printer</b></div>
+					<div class="panel panel-default rfz-card" style="margin-top: 12px">
+						<div class="panel-heading"><div class="rfz-card-title"><i class="fa fa-print"></i> Printer</div></div>
 						<div class="panel-body">
 							<div class="text-muted" style="margin-bottom: 8px">Config: <code class="rfidenter-zebra-config"></code></div>
 							<div class="table-responsive">
@@ -483,8 +554,8 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 						</div>
 					</div>
 
-					<div class="panel panel-default" style="margin-top: 12px">
-						<div class="panel-heading"><b>Encode / Print</b></div>
+					<div class="panel panel-default rfz-card" style="margin-top: 12px">
+						<div class="panel-heading"><div class="rfz-card-title"><i class="fa fa-qrcode"></i> Encode</div></div>
 						<div class="panel-body">
 					<div class="flex" style="gap: 14px; align-items: center; flex-wrap: wrap; margin-bottom: 12px">
 						<label class="radio-inline" style="margin: 0">
@@ -496,7 +567,9 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 							Auto (unique)
 						</label>
 
-						<button class="btn btn-default btn-sm rfidenter-zebra-feed" style="margin-left: auto">Feed label</button>
+						<button class="btn btn-default btn-sm rfidenter-zebra-feed" style="margin-left: auto">
+							<i class="fa fa-forward"></i> Feed
+						</button>
 					</div>
 
 					<div class="rfidenter-mode-manual">
@@ -521,7 +594,6 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 						<div class="form-group">
 							<label>Count (unique EPCs)</label>
 							<input class="form-control input-sm rfidenter-auto-count" style="width: 220px" value="1" />
-							<div class="text-muted">EPC’lar Zebra servisida persistent counter bilan generatsiya qilinadi.</div>
 						</div>
 					</div>
 
@@ -536,7 +608,9 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 						</label>
 					</div>
 
-					<button class="btn btn-primary btn-sm rfidenter-zebra-write">Chop etish / Write</button>
+					<button class="btn btn-primary btn-sm rfidenter-zebra-write">
+						<i class="fa fa-bolt"></i> Write
+					</button>
 					<span class="text-muted rfidenter-write-status" style="margin-left: 8px"></span>
 
 					<div class="rfidenter-result-wrap" style="margin-top: 12px; display:none">
