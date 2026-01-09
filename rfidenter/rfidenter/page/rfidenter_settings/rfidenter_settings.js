@@ -55,7 +55,7 @@ frappe.pages["rfidenter-settings"].on_page_load = function (wrapper) {
 					--rf-card-bg: var(--card-bg, #ffffff);
 					--rf-border: var(--border-color, #d1d8dd);
 					--rf-muted: var(--text-muted, #6b7280);
-					--rf-shadow: 0 10px 24px rgba(0, 0, 0, 0.08);
+					--rf-shadow: var(--shadow-sm, 0 6px 16px rgba(0, 0, 0, 0.08));
 				}
 				.rfidenter-settings .rfidenter-panel .panel-body { display: flex; flex-direction: column; gap: 10px; }
 				.rfidenter-settings .rfidenter-info-row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
@@ -84,14 +84,10 @@ frappe.pages["rfidenter-settings"].on_page_load = function (wrapper) {
 					align-items: center;
 					justify-content: center;
 					font-size: 16px;
-					color: #1f2937;
+					color: var(--text-color, #1f2937);
+					background: var(--control-bg, var(--rf-card-bg));
+					border: 1px solid var(--rf-border);
 					flex: 0 0 auto;
-				}
-				.rfidenter-settings .rfidenter-device-icon.zebra {
-					background: linear-gradient(135deg, #ffe3a1, #f6b48d);
-				}
-				.rfidenter-settings .rfidenter-device-icon.uhf {
-					background: linear-gradient(135deg, #c6f7e8, #b2d7ff);
 				}
 				.rfidenter-settings .rfidenter-device-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
 				.rfidenter-settings .rfidenter-device-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
@@ -109,11 +105,10 @@ frappe.pages["rfidenter-settings"].on_page_load = function (wrapper) {
 					border-radius: 999px;
 					font-size: 12px;
 					font-weight: 600;
-					background: #eef2f7;
-					color: #1f2937;
+					background: var(--control-bg, var(--rf-card-bg));
+					color: var(--text-color, #1f2937);
+					border: 1px solid var(--rf-border);
 				}
-				.rfidenter-settings .rfidenter-status-pill.ok { background: #e8f7ec; color: #1a7f37; }
-				.rfidenter-settings .rfidenter-status-pill.off { background: #fdecec; color: #a61b1b; }
 				.rfidenter-settings .rfidenter-status-hint { color: var(--rf-muted); font-size: 11px; text-align: right; }
 				.rfidenter-settings .rfidenter-device-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 				.rfidenter-settings .rfidenter-empty-card { color: var(--rf-muted); font-size: 12px; }
