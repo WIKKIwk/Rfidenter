@@ -561,24 +561,21 @@ frappe.pages["rfidenter-flow"].on_page_load = function (wrapper) {
 		});
 	}
 
-	function refreshAll({ toast = false } = {}) {
+	async function refreshAll({ toast = false } = {}) {
 		state.loading = true;
 		state.error = "";
 		renderStatus();
-		return Promise.all([fetchStats(), fetchRules(), fetchDnSettings()])
-			.then(() => {
-				state.lastSync = Date.now();
-				if (toast) {
-					frappe.show_alert({ message: "Yangilandi", indicator: "green" });
-				}
-			})
-			.catch(() => {
-				state.error = "Yangilashda xato";
-			})
-			.finally(() => {
-				state.loading = false;
-				renderAll();
-			});
+		try {
+			await Promise.all([fetchStats(), fetchRules(), fetchDnSettings()]);
+			state.lastSync = Date.now();
+			if (toast) {
+				frappe.show_alert({ message: "Yangilandi", indicator: "green" });
+			}
+		} catch (err) {
+			state.error = "Yangilashda xato";
+		}
+		state.loading = false;
+		renderAll();
 	}
 
 	function setDnToggleState($stock, $dn) {
@@ -596,7 +593,7 @@ frappe.pages["rfidenter-flow"].on_page_load = function (wrapper) {
 		setDnToggleState($stock, $dn);
 	});
 
-	$body.on("click", ".rf-flow-rule-save", function () {
+	$body.on("click", ".rf-flow-rule-save", async function () {
 		const $row = $(this).closest("tr");
 		const device = $row.data("device") || "any";
 		const ant = Number($row.data("ant")) || 0;
@@ -611,34 +608,32 @@ frappe.pages["rfidenter-flow"].on_page_load = function (wrapper) {
 
 		const $btn = $(this);
 		$btn.prop("disabled", true);
-		apiCall("rfidenter.rfidenter.api.upsert_antenna_rule", {
-			device,
-			antenna_id: ant,
-			submit_stock_entry: submitStock,
-			create_delivery_note: createDn,
-			submit_delivery_note: submitDn,
-		})
-			.then(() => {
-				frappe.show_alert({ message: "Qoida saqlandi", indicator: "green" });
-				return fetchRules();
-			})
-			.then(() => {
-				renderAll();
-			})
-			.finally(() => {
-				$btn.prop("disabled", false);
+		try {
+			await apiCall("rfidenter.rfidenter.api.upsert_antenna_rule", {
+				device,
+				antenna_id: ant,
+				submit_stock_entry: submitStock,
+				create_delivery_note: createDn,
+				submit_delivery_note: submitDn,
 			});
+			frappe.show_alert({ message: "Qoida saqlandi", indicator: "green" });
+			await fetchRules();
+			renderAll();
+		} catch (err) {
+			frappe.msgprint("Qoida saqlanmadi.");
+		}
+		$btn.prop("disabled", false);
 	});
 
-	$body.on("click", ".rf-flow-new-save", function () {
-		handleNewRuleSave({ advance: false, button: $(this) });
+	$body.on("click", ".rf-flow-new-save", async function () {
+		await handleNewRuleSave({ advance: false, button: $(this) });
 	});
 
-	$body.on("click", ".rf-flow-new-save-next", function () {
-		handleNewRuleSave({ advance: true, button: $(this) });
+	$body.on("click", ".rf-flow-new-save-next", async function () {
+		await handleNewRuleSave({ advance: true, button: $(this) });
 	});
 
-	function handleNewRuleSave({ advance, button }) {
+	async function handleNewRuleSave({ advance, button }) {
 		const deviceRaw = $newDevice.val() || "any";
 		const ant = normalizeAnt($newAnt.val());
 		if (!ant) {
@@ -650,29 +645,27 @@ frappe.pages["rfidenter-flow"].on_page_load = function (wrapper) {
 		const submitDn = $newDnSubmit.prop("checked");
 
 		button.prop("disabled", true);
-		apiCall("rfidenter.rfidenter.api.upsert_antenna_rule", {
-			device: deviceRaw,
-			antenna_id: ant,
-			submit_stock_entry: submitStock,
-			create_delivery_note: createDn,
-			submit_delivery_note: submitDn,
-		})
-			.then(() => {
-				frappe.show_alert({ message: "Yangi qoida qo'shildi", indicator: "green" });
-				if (advance) {
-					$newAnt.val(String(ant + 1));
-					$newAnt.trigger("focus");
-				} else {
-					$newAnt.val("");
-				}
-			})
-			.then(() => fetchRules())
-			.then(() => {
-				renderAll();
-			})
-			.finally(() => {
-				button.prop("disabled", false);
+		try {
+			await apiCall("rfidenter.rfidenter.api.upsert_antenna_rule", {
+				device: deviceRaw,
+				antenna_id: ant,
+				submit_stock_entry: submitStock,
+				create_delivery_note: createDn,
+				submit_delivery_note: submitDn,
 			});
+			frappe.show_alert({ message: "Yangi qoida qo'shildi", indicator: "green" });
+			if (advance) {
+				$newAnt.val(String(ant + 1));
+				$newAnt.trigger("focus");
+			} else {
+				$newAnt.val("");
+			}
+			await fetchRules();
+			renderAll();
+		} catch (err) {
+			frappe.msgprint("Qoida saqlanmadi.");
+		}
+		button.prop("disabled", false);
 	}
 
 	$body.on("click", ".rf-flow-open-rules", () => {
