@@ -1,6 +1,6 @@
 {
  "charts": [],
- "content": "[{\"id\": \"rfidenter_header\", \"type\": \"header\", \"data\": {\"text\": \"<span class=\\\"h4 rfidenter-workspace-flag\\\"><b>RFIDenter</b></span>\", \"col\": 12}}, {\"id\": \"rfidenter_desc\", \"type\": \"paragraph\", \"data\": {\"text\": \"<span class=\\\"rfidenter-workspace-desc\\\">UHF reader taglarini ERP ichida ko‘rsatish va Zebra printerda encode/print qilish.</span>\", \"col\": 12}}, {\"id\": \"rfidenter_spacer\", \"type\": \"spacer\", \"data\": {\"col\": 12}}, {\"id\": \"rfidenter_modules\", \"type\": \"header\", \"data\": {\"text\": \"<span class=\\\"rfidenter-section-title\\\">Bo‘limlar</span>\", \"col\": 12}}, {\"id\": \"rfidenter_sc_settings\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Sozlamalar\", \"col\": 4}}, {\"id\": \"rfidenter_sc_read\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"O‘qish (Read)\", \"col\": 4}}, {\"id\": \"rfidenter_sc_zebra\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Zebra (Print)\", \"col\": 4}}]",
+ "content": "[{\"id\": \"rfidenter_header\", \"type\": \"header\", \"data\": {\"text\": \"<span class=\\\"h4 rfidenter-workspace-flag\\\"><b>RFIDenter</b></span>\", \"col\": 12}}, {\"id\": \"rfidenter_desc\", \"type\": \"paragraph\", \"data\": {\"text\": \"<span class=\\\"rfidenter-workspace-desc\\\">UHF reader taglarini ERP ichida ko‘rsatish va Zebra printerda encode/print qilish.</span>\", \"col\": 12}}, {\"id\": \"rfidenter_spacer\", \"type\": \"spacer\", \"data\": {\"col\": 12}}, {\"id\": \"rfidenter_modules\", \"type\": \"header\", \"data\": {\"text\": \"<span class=\\\"rfidenter-section-title\\\">Bo‘limlar</span>\", \"col\": 12}}, {\"id\": \"rfidenter_sc_settings\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Sozlamalar\", \"col\": 4}}, {\"id\": \"rfidenter_sc_read\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"O‘qish (Read)\", \"col\": 4}}, {\"id\": \"rfidenter_sc_zebra\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Zebra (Print)\", \"col\": 4}}, {\"id\": \"rfidenter_sc_flow\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Antenna oqimi\", \"col\": 4}}]",
  "custom_blocks": [],
  "docstatus": 0,
  "doctype": "Workspace",
@@ -42,6 +42,11 @@
   {
    "label": "Zebra (Print)",
    "link_to": "rfidenter-zebra",
+   "type": "Page"
+  },
+  {
+   "label": "Antenna oqimi",
+   "link_to": "rfidenter-flow",
    "type": "Page"
   }
  ],
