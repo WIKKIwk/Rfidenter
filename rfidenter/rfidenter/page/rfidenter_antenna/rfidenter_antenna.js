@@ -84,6 +84,11 @@ frappe.pages["rfidenter-antenna"].on_page_load = function (wrapper) {
 		zebraReady: false,
 		zebraLoading: false,
 		zebraLimit: 10000,
+		zebraMeta: new Map(),
+		zebraMetaQueue: new Set(),
+		zebraMetaLoading: false,
+		zebraMetaTimer: null,
+		zebraMetaLimit: 300,
 	};
 
 	const $body = $(`
@@ -157,6 +162,10 @@ frappe.pages["rfidenter-antenna"].on_page_load = function (wrapper) {
 				.rfidenter-ant .rfidenter-note-empty { color: #98a0a6; font-style: italic; }
 				.rfidenter-ant .rfidenter-note-pill { background: #eef3ff; border-radius: 999px; padding: 2px 8px; display: inline-block; }
 				.rfidenter-ant .rfidenter-reads { font-weight: 600; }
+				.rfidenter-ant .rfidenter-se-link { font-weight: 600; color: #2563eb; }
+				.rfidenter-ant .rfidenter-se-link:hover { text-decoration: underline; }
+				.rfidenter-ant .rfidenter-se-meta { color: var(--rf-muted); font-size: 11px; margin-top: 2px; }
+				.rfidenter-ant .rfidenter-se-empty { color: #98a0a6; font-style: italic; font-size: 12px; }
 				.rfidenter-ant .rfidenter-ant-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
 				.rfidenter-ant .rfidenter-ant-hint { color: var(--rf-muted); font-size: 12px; }
 				.rfidenter-ant .rfidenter-saved { margin-top: 16px; }
@@ -231,6 +240,7 @@ frappe.pages["rfidenter-antenna"].on_page_load = function (wrapper) {
 										<th style="width: 90px">Reads</th>
 										<th style="width: 80px">RSSI</th>
 										<th style="width: 120px">Device</th>
+										<th style="width: 150px">Stock Entry</th>
 										<th style="width: 110px">Last</th>
 										<th style="width: 220px">Izoh</th>
 									</tr>
@@ -289,6 +299,7 @@ frappe.pages["rfidenter-antenna"].on_page_load = function (wrapper) {
 										<th style="width: 120px">Kun</th>
 										<th style="width: 110px">Vaqt</th>
 										<th style="width: 140px">Device</th>
+										<th style="width: 150px">Stock Entry</th>
 										<th style="width: 220px">Izoh</th>
 									</tr>
 								</thead>
@@ -355,6 +366,29 @@ frappe.pages["rfidenter-antenna"].on_page_load = function (wrapper) {
 		return state.notes.get(String(epc || "").toUpperCase()) || "";
 	}
 
+	function buildStockEntryCell(epc) {
+		const meta = getZebraMeta(epc);
+		if (!meta) {
+			const loading = state.zebraMetaLoading || state.zebraMetaQueue.size > 0;
+			return `<span class="rfidenter-se-empty">${loading ? "Yuklanmoqda..." : "—"}</span>`;
+		}
+		const stockEntry = String(meta.stock_entry || "").trim();
+		const status = String(meta.status || "").trim();
+		const itemCode = String(meta.item_code || "").trim();
+		const itemName = String(meta.item_name || "").trim();
+		const qty = meta.qty !== undefined && meta.qty !== null ? String(meta.qty) : "";
+		const uom = String(meta.uom || "").trim();
+		const label = [itemName || itemCode, qty && uom ? `${qty} ${uom}` : ""].filter(Boolean).join(" · ");
+		const title = [status ? `Status: ${status}` : "", label ? `Item: ${label}` : ""].filter(Boolean).join("\n");
+
+		if (!stockEntry) {
+			return `${status ? `<div class="rfidenter-se-meta" title="${escapeHtml(title)}">${escapeHtml(status)}</div>` : '<span class="rfidenter-se-empty">—</span>'}`;
+		}
+		const href = `/app/stock-entry/${encodeURIComponent(stockEntry)}`;
+		const metaLine = status ? `<div class="rfidenter-se-meta" title="${escapeHtml(title)}">${escapeHtml(status)}</div>` : "";
+		return `<a class="rfidenter-se-link" href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer" title="${escapeHtml(title)}">${escapeHtml(stockEntry)}</a>${metaLine}`;
+	}
+
 	function isZebraAllowed(epc) {
 		if (!state.zebraOnly) return true;
 		if (!state.zebraReady) return false;
@@ -373,6 +407,12 @@ frappe.pages["rfidenter-antenna"].on_page_load = function (wrapper) {
 		}
 		for (const epc of state.saved.keys()) {
 			if (!state.zebraEpcs.has(epc)) state.saved.delete(epc);
+		}
+		for (const epc of state.zebraMeta.keys()) {
+			if (!state.zebraEpcs.has(epc)) state.zebraMeta.delete(epc);
+		}
+		for (const epc of state.zebraMetaQueue.keys()) {
+			if (!state.zebraEpcs.has(epc)) state.zebraMetaQueue.delete(epc);
 		}
 	}
 
@@ -404,6 +444,64 @@ frappe.pages["rfidenter-antenna"].on_page_load = function (wrapper) {
 		}
 	}
 
+	function getZebraMeta(epc) {
+		const key = normalizeEpc(epc);
+		if (!key) return null;
+		return state.zebraMeta.get(key) || null;
+	}
+
+	function queueZebraMeta(epcs) {
+		if (!state.zebraOnly) return;
+		if (!Array.isArray(epcs) || !epcs.length) return;
+		for (const epc of epcs) {
+			const key = normalizeEpc(epc);
+			if (!key || state.zebraMeta.has(key)) continue;
+			state.zebraMetaQueue.add(key);
+		}
+		if (state.zebraMetaQueue.size) scheduleZebraMetaFetch();
+	}
+
+	function scheduleZebraMetaFetch() {
+		if (state.zebraMetaTimer) return;
+		state.zebraMetaTimer = window.setTimeout(() => {
+			state.zebraMetaTimer = null;
+			fetchZebraMetaBatch().catch(() => {});
+		}, 200);
+	}
+
+	async function fetchZebraMetaBatch() {
+		if (state.zebraMetaLoading || !state.zebraMetaQueue.size) return;
+		state.zebraMetaLoading = true;
+		try {
+			const epcs = [];
+			for (const epc of state.zebraMetaQueue) {
+				epcs.push(epc);
+				if (epcs.length >= state.zebraMetaLimit) break;
+			}
+			epcs.forEach((epc) => state.zebraMetaQueue.delete(epc));
+			if (!epcs.length) return;
+			const r = await frappe.call("rfidenter.rfidenter.api.zebra_epc_info", { epcs });
+			const items = Array.isArray(r?.message?.items) ? r.message.items : [];
+			for (const item of items) {
+				const key = normalizeEpc(item?.epc);
+				if (!key) continue;
+				state.zebraMeta.set(key, {
+					epc: key,
+					stock_entry: item?.stock_entry || item?.purchase_receipt || "",
+					status: item?.status || "",
+					item_code: item?.item_code || "",
+					item_name: item?.item_name || "",
+					qty: item?.qty ?? "",
+					uom: item?.uom || "",
+				});
+			}
+			render();
+		} finally {
+			state.zebraMetaLoading = false;
+			if (state.zebraMetaQueue.size) scheduleZebraMetaFetch();
+		}
+	}
+
 	async function fetchSavedTags({ quiet = false } = {}) {
 		if (savedLoading) return;
 		savedLoading = true;
@@ -430,6 +528,7 @@ frappe.pages["rfidenter-antenna"].on_page_load = function (wrapper) {
 			}
 			const epcs = items.map((i) => normalizeEpc(i?.epc)).filter(Boolean);
 			if (epcs.length) await fetchNotes({ epcs, quiet: true });
+			if (epcs.length) queueZebraMeta(epcs);
 			renderSaved();
 		} catch (e) {
 			if (!quiet) {
@@ -496,6 +595,7 @@ frappe.pages["rfidenter-antenna"].on_page_load = function (wrapper) {
 		const ant = clampAnt(tag?.antId ?? 0);
 		if (!isZebraAllowed(epc)) return;
 		if (!epc || ant <= 0) return;
+		queueZebraMeta([epc]);
 		const deltaRaw = Number(tag?.count ?? 1);
 		const delta = Number.isFinite(deltaRaw) ? Math.max(1, Math.min(1_000_000, Math.trunc(deltaRaw))) : 1;
 
@@ -557,6 +657,7 @@ frappe.pages["rfidenter-antenna"].on_page_load = function (wrapper) {
 
 	function renderSaved() {
 		const rows = buildSavedRows();
+		if (rows.length) queueZebraMeta(rows.map((r) => r.epc));
 		$savedBody.empty();
 		for (let i = 0; i < rows.length; i++) {
 			const r = rows[i];
@@ -572,6 +673,7 @@ frappe.pages["rfidenter-antenna"].on_page_load = function (wrapper) {
 					<td>${escapeHtml(fmtDate(r.lastAt))}</td>
 					<td>${escapeHtml(fmtTime(r.lastAt))}</td>
 					<td>${escapeHtml(r.device ?? "")}</td>
+					<td>${buildStockEntryCell(r.epc)}</td>
 					<td class="rfidenter-note-cell" data-epc="${escapeHtml(r.epc)}">
 						${note ? `<span class="rfidenter-note-pill rfidenter-note-text" title="${escapeHtml(note)}">${escapeHtml(noteShort)}</span>` : '<span class="rfidenter-note-empty">Izoh yo‘q</span>'}
 					</td>
@@ -635,6 +737,7 @@ frappe.pages["rfidenter-antenna"].on_page_load = function (wrapper) {
 		});
 
 		const rows = buildDetailRows();
+		if (rows.length) queueZebraMeta(rows.map((r) => r.epc));
 		$title.text(`ANT${state.selectedAnt} — taglar`);
 		const notesCount = rows.reduce((acc, r) => acc + (getNote(r.epc) ? 1 : 0), 0);
 		const zebraInfo = state.zebraOnly
@@ -658,6 +761,7 @@ frappe.pages["rfidenter-antenna"].on_page_load = function (wrapper) {
 					<td class="rfidenter-reads">${escapeHtml(r.count)}</td>
 					<td>${escapeHtml(r.rssi ?? "")}</td>
 					<td>${escapeHtml(r.device ?? "")}</td>
+					<td>${buildStockEntryCell(r.epc)}</td>
 					<td>${escapeHtml(fmtTime(r.lastAt))}</td>
 					<td class="rfidenter-note-cell" data-epc="${escapeHtml(r.epc)}">
 						${note ? `<span class="rfidenter-note-pill rfidenter-note-text" title="${escapeHtml(note)}">${escapeHtml(noteShort)}</span>` : '<span class="rfidenter-note-empty">Izoh yo‘q</span>'}

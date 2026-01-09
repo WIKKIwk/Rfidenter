@@ -1095,3 +1095,69 @@ def zebra_list_epcs(statuses: Any | None = None, limit: Any | None = None) -> di
 	)
 	epcs = [_normalize_hex(r.get("epc")) for r in rows if _normalize_hex(r.get("epc"))]
 	return {"ok": True, "count": len(epcs), "epcs": epcs}
+
+
+@frappe.whitelist()
+def zebra_epc_info(epcs: Any | None = None, limit: Any | None = None) -> dict[str, Any]:
+	"""Fetch Zebra tag metadata (including Stock Entry) for given EPCs."""
+	if not has_rfidenter_access():
+		frappe.throw("RFIDenter: sizda RFIDer roli yo‘q.", frappe.PermissionError)
+
+	items: list[str] = []
+	if epcs:
+		if isinstance(epcs, str):
+			try:
+				parsed = json.loads(epcs)
+				epcs = parsed if isinstance(parsed, list) else [epcs]
+			except Exception:
+				epcs = [x.strip() for x in epcs.split(",") if x.strip()]
+		if not isinstance(epcs, list):
+			epcs = [epcs]
+		for item in epcs:
+			epc = _normalize_hex(item)
+			if epc:
+				items.append(epc)
+
+	try:
+		lim = int(limit) if limit is not None else len(items) or 0
+	except Exception:
+		lim = len(items) or 0
+	lim = max(1, min(5000, lim))
+
+	uniq: list[str] = []
+	seen: set[str] = set()
+	for epc in items:
+		if epc in seen:
+			continue
+		seen.add(epc)
+		uniq.append(epc)
+		if len(uniq) >= lim:
+			break
+
+	if not uniq:
+		return {"ok": True, "count": 0, "items": []}
+
+	rows = frappe.get_all(
+		"RFID Zebra Tag",
+		fields=["epc", "status", "purchase_receipt", "item_code", "item_name", "qty", "uom"],
+		filters={"epc": ["in", uniq]},
+		limit=len(uniq),
+	)
+
+	row_map: dict[str, dict[str, Any]] = {}
+	for row in rows:
+		epc = _normalize_hex(row.get("epc"))
+		if not epc:
+			continue
+		row_map[epc] = {
+			"epc": epc,
+			"stock_entry": row.get("purchase_receipt") or "",
+			"status": row.get("status") or "",
+			"item_code": row.get("item_code") or "",
+			"item_name": row.get("item_name") or "",
+			"qty": row.get("qty") or 0,
+			"uom": row.get("uom") or "",
+		}
+
+	out = [row_map[epc] for epc in uniq if epc in row_map]
+	return {"ok": True, "count": len(out), "items": out}
