@@ -1,0 +1,87 @@
+body.rfidenter-workspace .layout-main-section {
+	transition: opacity 0.18s ease, transform 0.18s ease;
+}
+
+body.rfidenter-workspace.rfidenter-workspace-leaving .layout-main-section {
+	opacity: 0.85;
+	transform: translateY(4px);
+}
+
+body.rfidenter-workspace #page-Workspaces .editor-js-container {
+	animation: rfidenter-workspace-fade-in 0.24s ease both;
+}
+
+body.rfidenter-workspace #page-Workspaces .rfidenter-workspace-desc {
+	display: inline-block;
+	font-size: 13px;
+	color: var(--text-muted);
+	margin-bottom: 4px;
+}
+
+body.rfidenter-workspace #page-Workspaces .rfidenter-section-title {
+	display: inline-block;
+	font-size: 11px;
+	letter-spacing: 0.08em;
+	text-transform: uppercase;
+	color: var(--text-muted);
+	margin-top: 8px;
+}
+
+body.rfidenter-workspace #page-Workspaces .shortcut-widget-box {
+	border-radius: 16px;
+	border: 1px solid var(--border-color);
+	background: var(--card-bg, #fff);
+	padding: 14px 16px;
+	min-height: 88px;
+	box-shadow: var(--shadow-sm, 0 4px 14px rgba(0, 0, 0, 0.08));
+	transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
+}
+
+body.rfidenter-workspace #page-Workspaces .shortcut-widget-box:hover {
+	transform: translateY(-2px);
+	box-shadow: var(--shadow-md, 0 8px 20px rgba(0, 0, 0, 0.1));
+	border-color: var(--border-color);
+}
+
+body.rfidenter-workspace #page-Workspaces .shortcut-widget-box:active {
+	transform: translateY(0);
+}
+
+body.rfidenter-workspace #page-Workspaces .shortcut-widget-box .widget-head {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	justify-content: space-between;
+}
+
+body.rfidenter-workspace #page-Workspaces .shortcut-widget-box .widget-title {
+	font-size: 15px;
+	font-weight: 600;
+	color: var(--text-color);
+}
+
+body.rfidenter-workspace #page-Workspaces .shortcut-widget-box .widget-control {
+	opacity: 0.6;
+	transition: transform 0.2s ease, opacity 0.2s ease;
+}
+
+body.rfidenter-workspace #page-Workspaces .shortcut-widget-box:hover .widget-control {
+	opacity: 1;
+	transform: translateX(2px);
+}
+
+body.rfidenter-workspace #page-Workspaces .shortcut-widget-box .widget-body,
+body.rfidenter-workspace #page-Workspaces .shortcut-widget-box .widget-footer {
+	display: none;
+}
+
+@keyframes rfidenter-workspace-fade-in {
+	from {
+		opacity: 0;
+		transform: translateY(6px);
+	}
+	to {
+		opacity: 1;
+		transform: translateY(0);
+	}
+}
