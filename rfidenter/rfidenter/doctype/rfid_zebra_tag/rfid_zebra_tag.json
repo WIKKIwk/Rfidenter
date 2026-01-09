@@ -15,6 +15,9 @@
   "printed_at",
   "consumed_at",
   "purchase_receipt",
+  "delivery_note",
+  "delivery_note_submitted_at",
+  "delivery_note_device",
   "client_request_id",
   "requested_by",
   "consumed_device",
@@ -95,6 +98,24 @@
    "in_list_view": 1,
    "label": "Stock Entry",
    "options": "Stock Entry"
+  },
+  {
+   "fieldname": "delivery_note",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Delivery Note",
+   "options": "Delivery Note"
+  },
+  {
+   "fieldname": "delivery_note_submitted_at",
+   "fieldtype": "Datetime",
+   "in_list_view": 1,
+   "label": "Delivery Submitted At"
+  },
+  {
+   "fieldname": "delivery_note_device",
+   "fieldtype": "Data",
+   "label": "Delivery Device"
   },
   {
    "fieldname": "client_request_id",

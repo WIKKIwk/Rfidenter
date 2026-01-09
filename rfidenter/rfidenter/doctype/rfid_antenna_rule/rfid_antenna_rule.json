@@ -1,0 +1,86 @@
+{
+ "actions": [],
+ "autoname": "format:{device}-{antenna_id}",
+ "creation": "2026-01-10 00:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "device",
+  "antenna_id",
+  "submit_stock_entry",
+  "create_delivery_note",
+  "submit_delivery_note"
+ ],
+ "fields": [
+  {
+   "default": "any",
+   "description": "Use \"any\" to apply to all devices.",
+   "fieldname": "device",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Device",
+   "reqd": 1
+  },
+  {
+   "fieldname": "antenna_id",
+   "fieldtype": "Int",
+   "in_list_view": 1,
+   "label": "Antenna Port",
+   "reqd": 1
+  },
+  {
+   "default": "0",
+   "fieldname": "submit_stock_entry",
+   "fieldtype": "Check",
+   "label": "Submit Stock Entry"
+  },
+  {
+   "depends_on": "eval:doc.submit_stock_entry == 1",
+   "default": "1",
+   "fieldname": "create_delivery_note",
+   "fieldtype": "Check",
+   "label": "Create Delivery Note"
+  },
+  {
+   "default": "0",
+   "fieldname": "submit_delivery_note",
+   "fieldtype": "Check",
+   "label": "Submit Delivery Note"
+  }
+ ],
+ "links": [],
+ "modified": "2026-01-10 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "RFIDenter",
+ "name": "RFID Antenna Rule",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "RFIDer",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "track_changes": 1
+}
