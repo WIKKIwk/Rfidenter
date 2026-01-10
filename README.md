@@ -68,6 +68,26 @@ bench start
 - RFIDenter Zebra page: /app/rfidenter-zebra
 - RFIDenter Antenna list: /app/rfidenter-antenna
 
+## >>> After Pulling Updates (Important)
+If you update the app from GitHub and the UI changes do not appear:
+
+1) Build assets:
+```
+bench build --app rfidenter
+```
+
+2) Clear cache:
+```
+bench --site <your-site> clear-cache
+```
+
+3) Restart bench:
+```
+bench restart
+```
+
+4) Hard refresh the browser (Ctrl+Shift+R).
+
 ## >>> Configuration (Site Config)
 Edit your site config file:
 ```
