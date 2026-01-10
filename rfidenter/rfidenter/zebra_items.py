@@ -309,29 +309,30 @@ def _claim_for_processing(epc: str) -> bool:
 	"""
 
 	try:
+		modified_by = str(getattr(frappe.session, "user", None) or "Administrator")
 		ttl = _processing_claim_ttl_sec()
 		if ttl > 0:
 			frappe.db.sql(
 				"""
 				UPDATE `tabRFID Zebra Tag`
-				SET `status`='Processing', `last_error`=''
+				SET `status`='Processing', `last_error`='', `modified`=NOW(), `modified_by`=%s
 				WHERE `name`=%s
 				  AND (
 						COALESCE(`status`, '') NOT IN ('Consumed', 'Processing')
 						OR (`status`='Processing' AND TIMESTAMPDIFF(SECOND, `modified`, NOW()) >= %s)
 					)
 				""",
-				(epc, ttl),
+				(modified_by, epc, ttl),
 			)
 		else:
 			frappe.db.sql(
 				"""
 				UPDATE `tabRFID Zebra Tag`
-				SET `status`='Processing', `last_error`=''
+				SET `status`='Processing', `last_error`='', `modified`=NOW(), `modified_by`=%s
 				WHERE `name`=%s
 				  AND COALESCE(`status`, '') NOT IN ('Consumed', 'Processing')
 				""",
-				(epc,),
+				(modified_by, epc),
 			)
 		try:
 			return bool(getattr(frappe.db, "_cursor", None) and frappe.db._cursor.rowcount)
