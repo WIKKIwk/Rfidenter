@@ -1238,7 +1238,7 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 				const v = r?.message;
 				const uom = String(v?.stock_uom || "").trim();
 				itemState.itemStockUom = uom;
-				if (uom && itemState.controls.uom && !itemState.controls.uom.get_value()) {
+				if (uom && itemState.controls.uom) {
 					itemState.controls.uom.set_value(uom);
 				}
 			} catch {
