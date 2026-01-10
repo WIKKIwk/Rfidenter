@@ -815,6 +815,7 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 			controlsReady: false,
 			processing: false,
 			timer: null,
+			itemStockUom: "",
 			controls: { item_group: null, item: null, qty: null, uom: null, ant: null },
 		};
 		const scaleState = {
@@ -856,6 +857,12 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 			const s = normalizeScaleUnit(unit);
 			const map = { kg: "Kg", g: "Gram", lb: "Pound", oz: "Ounce" };
 			return map[s] || "";
+		}
+
+		function isKgUom(raw) {
+			const s = String(raw || "").trim().toLowerCase();
+			if (!s) return false;
+			return s === "kg" || s === "kgs" || s === "kilogram" || s === "kilograms";
 		}
 
 		function formatScaleWeight(weight, unit) {
@@ -912,6 +919,7 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 			if (!itemState.controlsReady) return;
 			if (!Number.isFinite(payload.weight)) return;
 			if (payload.stable === false) return;
+			if (!isKgUom(itemState.itemStockUom)) return;
 
 			const qtyControl = itemState.controls.qty;
 			const uomControl = itemState.controls.uom;
@@ -1217,7 +1225,10 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 
 		async function resolveItemDefaults(itemCode) {
 			const code = String(itemCode || "").trim();
-			if (!code) return;
+			if (!code) {
+				itemState.itemStockUom = "";
+				return;
+			}
 			try {
 				const r = await frappe.call("frappe.client.get_value", {
 					doctype: "Item",
@@ -1226,10 +1237,12 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 				});
 				const v = r?.message;
 				const uom = String(v?.stock_uom || "").trim();
+				itemState.itemStockUom = uom;
 				if (uom && itemState.controls.uom && !itemState.controls.uom.get_value()) {
 					itemState.controls.uom.set_value(uom);
 				}
 			} catch {
+				itemState.itemStockUom = "";
 				// ignore
 			}
 		}
@@ -1250,6 +1263,7 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 						onchange: function () {
 						try {
 							me.controls.item.set_value("");
+							itemState.itemStockUom = "";
 						} catch {
 							// ignore
 						}
@@ -1267,6 +1281,7 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 						options: "Item",
 						placeholder: "Mahsulot",
 						onchange: function () {
+						itemState.itemStockUom = "";
 						resolveItemDefaults(this.value).catch(() => {});
 					},
 					get_query: function () {
