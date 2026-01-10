@@ -480,6 +480,8 @@ frappe.pages["rfidenter-flow"].on_page_load = function (wrapper) {
 
 		const rows = state.dnSettings
 			.map((row) => {
+				const rate =
+					row.default_rate === null || row.default_rate === undefined ? "--" : row.default_rate;
 				return `
 					<tr>
 						<td>${escapeHtml(row.item_code || "--")}</td>
@@ -487,6 +489,7 @@ frappe.pages["rfidenter-flow"].on_page_load = function (wrapper) {
 						<td>${escapeHtml(row.company || "--")}</td>
 						<td>${escapeHtml(row.warehouse || "--")}</td>
 						<td>${escapeHtml(row.selling_price_list || "--")}</td>
+						<td>${escapeHtml(rate)}</td>
 					</tr>`;
 			})
 			.join("");
@@ -501,6 +504,7 @@ frappe.pages["rfidenter-flow"].on_page_load = function (wrapper) {
 							<th>Company</th>
 							<th>Warehouse</th>
 							<th>Price list</th>
+							<th>Default rate</th>
 						</tr>
 					</thead>
 					<tbody>${rows}</tbody>

@@ -54,6 +54,19 @@ def _consume_requires_ant_match() -> bool:
 	return s in ("1", "true", "yes", "y", "on")
 
 
+def _processing_claim_ttl_sec() -> int:
+	"""Seconds after which a stuck Processing tag can be reclaimed."""
+
+	raw = _get_site_setting("rfidenter_zebra_processing_ttl_sec", 180)
+	try:
+		value = int(float(raw))
+	except Exception:
+		return 0
+	if value <= 0:
+		return 0
+	return min(3600, value)
+
+
 def _get_epc_prefix() -> str:
 	"""Return an optional EPC hex prefix for Zebra-generated tags.
 
@@ -296,15 +309,30 @@ def _claim_for_processing(epc: str) -> bool:
 	"""
 
 	try:
-		frappe.db.sql(
-			"""
-			UPDATE `tabRFID Zebra Tag`
-			SET `status`='Processing', `last_error`=''
-			WHERE `name`=%s
-			  AND COALESCE(`status`, '') NOT IN ('Consumed', 'Processing')
-			""",
-			(epc,),
-		)
+		ttl = _processing_claim_ttl_sec()
+		if ttl > 0:
+			frappe.db.sql(
+				"""
+				UPDATE `tabRFID Zebra Tag`
+				SET `status`='Processing', `last_error`=''
+				WHERE `name`=%s
+				  AND (
+						COALESCE(`status`, '') NOT IN ('Consumed', 'Processing')
+						OR (`status`='Processing' AND TIMESTAMPDIFF(SECOND, `modified`, NOW()) >= %s)
+					)
+				""",
+				(epc, ttl),
+			)
+		else:
+			frappe.db.sql(
+				"""
+				UPDATE `tabRFID Zebra Tag`
+				SET `status`='Processing', `last_error`=''
+				WHERE `name`=%s
+				  AND COALESCE(`status`, '') NOT IN ('Consumed', 'Processing')
+				""",
+				(epc,),
+			)
 		try:
 			return bool(getattr(frappe.db, "_cursor", None) and frappe.db._cursor.rowcount)
 		except Exception:
@@ -413,6 +441,14 @@ def _create_delivery_note_draft_for_tag(tag: dict[str, Any], *, ant_id: int, dev
 	if not stock_uom:
 		raise ValueError("Item stock_uom aniqlanmadi.")
 
+	default_rate = 0.0
+	try:
+		default_rate = float(settings.default_rate or 0)
+	except Exception:
+		default_rate = 0.0
+	if default_rate < 0:
+		default_rate = 0.0
+
 	uom_value = uom or stock_uom
 	cf = _uom_conversion_factor(item_code, uom=uom_value, stock_uom=stock_uom)
 
@@ -431,8 +467,8 @@ def _create_delivery_note_draft_for_tag(tag: dict[str, Any], *, ant_id: int, dev
 				"stock_uom": stock_uom,
 				"conversion_factor": cf,
 				"warehouse": settings.warehouse,
-				"rate": 0,
-				"price_list_rate": 0,
+				"rate": default_rate,
+				"price_list_rate": default_rate,
 			}
 		],
 		"remarks": f"RFID Zebra: EPC={tag.get('epc')} ANT={ant_id} DEV={device}",

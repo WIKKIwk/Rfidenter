@@ -9,7 +9,8 @@
   "company",
   "customer",
   "warehouse",
-  "selling_price_list"
+  "selling_price_list",
+  "default_rate"
  ],
  "fields": [
   {
@@ -51,6 +52,12 @@
    "fieldtype": "Link",
    "label": "Selling Price List",
    "options": "Price List"
+  },
+  {
+   "fieldname": "default_rate",
+   "fieldtype": "Currency",
+   "label": "Default Rate",
+   "options": "Company:company:default_currency"
   }
  ],
  "links": [],

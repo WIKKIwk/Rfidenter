@@ -441,10 +441,11 @@ public final class BridgeMain {
         handleTag(args[0]);
       } else if ("ReadOver".equals(method.getName())) {
         sendEvent("READ_OVER", jsonObj("ok", Boolean.TRUE));
-      } else if ("tagCallbackFailed".equals(method.getName()) && args != null && args.length == 1) {
-        sendEvent("TAG_FAIL", jsonObj("rc", Integer.valueOf(intv(args[0], 0))));
+      } else if ("tagCallbackFailed".equals(method.getName())) {
+        int rc = (args != null && args.length == 1) ? intv(args[0], 0) : 0;
+        sendEvent("TAG_FAIL", jsonObj("rc", Integer.valueOf(rc)));
       }
-      return null;
+      return method.getReturnType() == int.class ? Integer.valueOf(0) : null;
     };
     Object proxy = Proxy.newProxyInstance(cbClass.getClassLoader(), new Class<?>[] { cbClass }, h);
     tagCallbackProxy = proxy;

@@ -562,7 +562,15 @@ def list_delivery_note_settings() -> dict[str, Any]:
 
 	rows = frappe.get_all(
 		"RFID Delivery Note Setting",
-		fields=["name", "item_code", "company", "customer", "warehouse", "selling_price_list"],
+		fields=[
+			"name",
+			"item_code",
+			"company",
+			"customer",
+			"warehouse",
+			"selling_price_list",
+			"default_rate",
+		],
 		order_by="modified desc",
 		limit=500,
 	)
