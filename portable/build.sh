@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 APP_DIR="$(cd -- "$ROOT_DIR/.." && pwd)"
+REPO_ROOT="$(cd -- "$ROOT_DIR/../../.." && pwd)"
 TEMPLATE_DIR="$ROOT_DIR/templates"
 DIST_ROOT="$ROOT_DIR/dist"
 DIST_DIR="$DIST_ROOT/rfid-agent"
@@ -66,8 +67,13 @@ copy_tree() {
   (cd "$src" && tar -cf - .) | (cd "$dst" && tar -xf -)
 }
 
-copy_tree "$APP_DIR/Demo" "$DIST_DIR/rfid/Demo"
-copy_tree "$APP_DIR/SDK" "$DIST_DIR/rfid/SDK"
+RFID_SRC="$APP_DIR"
+if [[ -d "$REPO_ROOT/rfid/Demo/web-localhost" ]]; then
+  RFID_SRC="$REPO_ROOT/rfid"
+fi
+
+copy_tree "$RFID_SRC/Demo" "$DIST_DIR/rfid/Demo"
+copy_tree "$RFID_SRC/SDK" "$DIST_DIR/rfid/SDK"
 
 rm -rf "$DIST_DIR/rfid/Demo/web-localhost/logs"
 mkdir -p "$DIST_DIR/rfid/Demo/web-localhost/logs"
