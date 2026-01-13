@@ -594,41 +594,27 @@ class TestAntennaFlow(FrappeTestCase):
 		if not api._dedup_by_ant_enabled():
 			self.skipTest("dedup disabled")
 
-		class _CaptureCache:
-			def __init__(self) -> None:
-				self.values: dict[str, object] = {}
-
-			def get_value(self, key, *args, **kwargs):
-				return self.values.get(key)
-
-			def set_value(self, key, value, *args, **kwargs):
-				self.values[key] = value
-
-			def delete_value(self, key, *args, **kwargs):
-				self.values.pop(key, None)
-
-			def hset(self, *args, **kwargs):
-				return None
-
-			def hgetall(self, *args, **kwargs):
-				return {}
-
-			def hdel(self, *args, **kwargs):
-				return None
-
 		device = "DEV 1"
 		epc = f"{self.EPC_PREFIX}000000000006"
 		ant_id = 1
 		expected_key = f"{api.SEEN_PREFIX}{api._normalize_device_id(device) or device}:{ant_id}:{epc}"
 		sanitized_key = f"{api.SEEN_PREFIX}{api._sanitize_agent_id(device) or device}:{ant_id}:{epc}"
 
-		cache = _CaptureCache()
+		frappe.cache.delete_value(expected_key)
+		frappe.cache.delete_value(sanitized_key)
 
-		with patch("rfidenter.rfidenter.api.frappe.cache", return_value=cache):
+		set_keys: list[str] = []
+		original_set_value = frappe.cache.set_value
+
+		def _capture_set_value(key, value, *args, **kwargs):
+			set_keys.append(key)
+			return original_set_value(key, value, *args, **kwargs)
+
+		with patch.object(frappe.cache, "set_value", side_effect=_capture_set_value):
 			api.ingest_tags(device=device, tags=[{"epcId": epc, "antId": ant_id, "count": 1}])
 
-		self.assertTrue(cache.get_value(expected_key))
-		self.assertFalse(cache.get_value(sanitized_key))
+		self.assertIn(expected_key, set_keys)
+		self.assertNotIn(sanitized_key, set_keys)
 
 	def test_normalize_device_id_contract(self) -> None:
 		self.assertEqual(api._normalize_device_id(" DEV 1 "), "DEV 1")
