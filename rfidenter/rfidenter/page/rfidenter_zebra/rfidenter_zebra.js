@@ -110,6 +110,7 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 			backoffCount: 0,
 			pollMode: "",
 		},
+		cancelToken: 0,
 	};
 	let autoFallbackAllowed = true;
 	let autoFallbackTried = false;
@@ -252,6 +253,7 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 		const requestId = String(msg?.request_id || "").trim();
 		if (!requestId) throw new Error("request_id olinmadi");
 
+		const token = state.cancelToken;
 		return await new Promise((resolve, reject) => {
 			const timer = window.setTimeout(() => {
 				state.pending.delete(requestId);
@@ -263,6 +265,9 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 			(async () => {
 				for (let i = 0; i < 200; i++) {
 					if (!state.pending.has(requestId)) return;
+					if (token !== state.cancelToken) {
+						throw new Error("Cancelled");
+					}
 					// eslint-disable-next-line no-await-in-loop
 					await sleep(250);
 					// eslint-disable-next-line no-await-in-loop
@@ -1471,8 +1476,14 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 			return Number.isFinite(n) ? n : null;
 		}
 
-	function setBatchQueue($el, raw) {
+	function setBatchQueue($el, raw, { hideIfNull = false } = {}) {
 		const n = normalizeQueueDepth(raw);
+		if (hideIfNull && n === null) {
+			$el.text("");
+			$el.closest(".rfz-batch-field").hide();
+			return;
+		}
+		$el.closest(".rfz-batch-field").show();
 		$el.text(Number.isFinite(n) ? String(n) : "N/A");
 	}
 
@@ -1500,6 +1511,21 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 
 	function stopPollingTimers() {
 		stopBatchPolling();
+		if (itemState.timer) {
+			window.clearInterval(itemState.timer);
+			itemState.timer = null;
+		}
+		state.cancelToken += 1;
+		for (const pending of state.pending.values()) {
+			window.clearTimeout(pending.timer);
+			pending.reject(new Error("Cancelled"));
+		}
+		state.pending.clear();
+	}
+
+	function startManualQueueTimer() {
+		if (itemState.timer) return;
+		itemState.timer = window.setInterval(() => processItemQueue().catch(() => {}), 5000);
 	}
 
 	function startBatchPolling() {
@@ -1647,8 +1673,8 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 			const printDepth = meta?.print ?? meta?.print_outbox_depth ?? data?.print_outbox_depth;
 			const erpDepth = meta?.erp ?? meta?.erp_outbox_depth ?? data?.erp_outbox_depth;
 			const agentDepth = meta?.agent ?? meta?.agent_queue_depth ?? data?.agent_queue_depth;
-			setBatchQueue($batchQueuePrint, printDepth);
-			setBatchQueue($batchQueueErp, erpDepth);
+			setBatchQueue($batchQueuePrint, printDepth, { hideIfNull: true });
+			setBatchQueue($batchQueueErp, erpDepth, { hideIfNull: true });
 			setBatchQueue($batchQueueAgent, agentDepth);
 		}
 
@@ -2347,8 +2373,7 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 			// ignore
 		}
 		try {
-			if (itemState.timer) window.clearInterval(itemState.timer);
-			itemState.timer = window.setInterval(() => processItemQueue().catch(() => {}), 5000);
+			startManualQueueTimer();
 		} catch {
 			// ignore
 		}
@@ -2363,6 +2388,7 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 			$(wrapper).on("hide", () => stopPollingTimers());
 			$(wrapper).on("show", () => {
 				startBatchPolling();
+				startManualQueueTimer();
 				pollDeviceStatus({ quiet: true });
 			});
 		} catch {
@@ -2380,6 +2406,7 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 					return;
 				}
 				startBatchPolling();
+				startManualQueueTimer();
 				pollDeviceStatus({ quiet: true });
 			});
 		} catch {
