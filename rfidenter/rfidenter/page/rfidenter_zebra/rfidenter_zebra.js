@@ -583,13 +583,85 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 						</div>
 
 						<a class="btn btn-default btn-sm rfidenter-zebra-open" target="_blank" rel="noopener noreferrer"><i class="fa fa-external-link"></i> UI</a>
-					</div>
-					</div>
 				</div>
+				</div>
+			</div>
 
 				<div class="panel panel-default rfz-card" style="margin-top: 12px">
 					<div class="panel-heading">
-						<div class="rfz-card-title"><span class="rfz-icon"><i class="fa fa-tag"></i></span> Print</div>
+						<div class="rfz-card-title"><span class="rfz-icon"><i class="fa fa-sitemap"></i></span> Batch Control</div>
+						<span class="rfz-pill rfz-batch-state">Stopped</span>
+					</div>
+					<div class="panel-body">
+						<div class="row rfz-form-row">
+							<div class="col-md-4 rfz-control">
+								<label class="text-muted">Device ID</label>
+								<input class="form-control input-sm rfz-device-id" placeholder="EDGE-001" />
+							</div>
+							<div class="col-md-4 rfz-control">
+								<label class="text-muted">Batch ID</label>
+								<input class="form-control input-sm rfz-batch-id" placeholder="BATCH-001" />
+							</div>
+							<div class="col-md-4 rfz-control">
+								<label class="text-muted">Product</label>
+								<div class="rfz-batch-product"></div>
+							</div>
+						</div>
+
+						<div class="rfz-actions" style="margin-top: 12px">
+							<button class="btn btn-primary btn-sm rfz-batch-start"><i class="fa fa-play"></i> Start</button>
+							<button class="btn btn-default btn-sm rfz-batch-stop"><i class="fa fa-stop"></i> Stop</button>
+							<button class="btn btn-default btn-sm rfz-batch-switch"><i class="fa fa-exchange"></i> Switch Product</button>
+							<span class="rfz-pill rfz-batch-status"></span>
+							<span class="rfz-pill rfz-device-status"></span>
+						</div>
+
+						<div class="rfz-batch-grid" style="margin-top: 12px">
+							<div class="rfz-batch-field">
+								<div class="text-muted">Last seen</div>
+								<div class="rfz-batch-value rfz-last-seen">--</div>
+							</div>
+							<div class="rfz-batch-field">
+								<div class="text-muted">Last seq</div>
+								<div class="rfz-batch-value rfz-last-seq">--</div>
+							</div>
+							<div class="rfz-batch-field">
+								<div class="text-muted">Current batch</div>
+								<div class="rfz-batch-value rfz-current-batch">--</div>
+							</div>
+							<div class="rfz-batch-field">
+								<div class="text-muted">Current product</div>
+								<div class="rfz-batch-value rfz-current-product">--</div>
+							</div>
+							<div class="rfz-batch-field">
+								<div class="text-muted">Pending product</div>
+								<div class="rfz-batch-value rfz-pending-product">--</div>
+							</div>
+						</div>
+
+						<div class="rfz-batch-grid" style="margin-top: 12px">
+							<div class="rfz-batch-field">
+								<div class="text-muted">Print queue</div>
+								<div class="rfz-batch-value rfz-queue-print">N/A</div>
+							</div>
+							<div class="rfz-batch-field">
+								<div class="text-muted">ERP queue</div>
+								<div class="rfz-batch-value rfz-queue-erp">N/A</div>
+							</div>
+							<div class="rfz-batch-field">
+								<div class="text-muted">Agent queue</div>
+								<div class="rfz-batch-value rfz-queue-agent">N/A</div>
+							</div>
+						</div>
+					</div>
+				</div>
+
+				<details class="rfz-advanced">
+					<summary>Advanced / Fallback</summary>
+
+				<div class="panel panel-default rfz-card" style="margin-top: 12px">
+					<div class="panel-heading">
+						<div class="rfz-card-title"><span class="rfz-icon"><i class="fa fa-tag"></i></span> Manual Print (Fallback)</div>
 						<button class="btn btn-default btn-xs rfz-open-settings" title="Item receipt settings">
 							<i class="fa fa-gear"></i>
 						</button>
@@ -626,7 +698,6 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 										<button class="btn btn-default btn-sm rfz-stop" title="Navbatni to‘xtatish"><i class="fa fa-stop"></i></button>
 										<button class="btn btn-default btn-sm rfz-calibrate" title="Kalibratsiya"><i class="fa fa-sliders"></i></button>
 										<span class="rfz-pill rfz-status"></span>
-										<span class="rfz-pill rfz-queue"></span>
 									</div>
 								</div>
 							</div>
@@ -669,8 +740,6 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 					</div>
 				</div>
 
-				<details class="rfz-advanced">
-					<summary>Qo‘shimcha</summary>
 					<div class="panel panel-default rfz-card" style="margin-top: 12px">
 						<div class="panel-heading"><div class="rfz-card-title"><span class="rfz-icon"><i class="fa fa-print"></i></span> Printer</div></div>
 						<div class="panel-body">
