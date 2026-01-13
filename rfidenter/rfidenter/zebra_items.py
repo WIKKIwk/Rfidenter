@@ -855,13 +855,13 @@ def process_tag_reads(
 			"item_code",
 			"qty",
 			"uom",
-				"consume_ant_id",
-				"status",
-				"printed_at",
-				"scan_recon_required",
-				"purchase_receipt",
-				"delivery_note",
-				"client_request_id",
+			"consume_ant_id",
+			"status",
+			"printed_at",
+			"scan_recon_required",
+			"purchase_receipt",
+			"delivery_note",
+			"client_request_id",
 		],
 		filters={"epc": ["in", epcs]},
 		limit=len(epcs),
@@ -885,12 +885,12 @@ def process_tag_reads(
 			if not isinstance(ants, set):
 				ants = set()
 
-				expected = _normalize_ant(row.get("consume_ant_id"))
-				status = str(row.get("status") or "").strip()
-				printed_at = row.get("printed_at")
-				scan_recon_required = int(row.get("scan_recon_required") or 0)
-				if status != "Printed" or not printed_at or scan_recon_required:
-					continue
+			expected = _normalize_ant(row.get("consume_ant_id"))
+			status = str(row.get("status") or "").strip()
+			printed_at = row.get("printed_at")
+			scan_recon_required = int(row.get("scan_recon_required") or 0)
+			if status != "Printed" or not printed_at or scan_recon_required:
+				continue
 
 			ant_for_stock, rule_stock = _find_rule_for_ants(ants, rules, device_key, "submit_stock_entry")
 			ant_for_delivery, rule_delivery = _find_rule_for_ants(ants, rules, device_key, "submit_delivery_note")
@@ -928,49 +928,49 @@ def process_tag_reads(
 							if _claim_for_processing(epc):
 								_submit_stock_entry(se_name, ant_id=stock_ant, device=str(device or "")[:64])
 								stock_entry_submitted = True
-						else:
-							# Claim first to avoid double receipts.
-							if _claim_for_processing(epc):
-								tag_payload = {
-									"epc": epc,
-									"item_code": row.get("item_code"),
-									"qty": row.get("qty"),
-									"uom": row.get("uom"),
-									"event_id": event_id,
-									"batch_id": batch_id,
-									"seq": seq,
-								}
-								se_name = _create_stock_entry_draft_for_tag(
-									tag_payload,
-									ant_id=stock_ant,
-									device=str(device or "")[:64],
-									idempotency_key=idempotency_key,
-									key_type=key_type,
-								)
-								# Persist draft name even if submit fails, to prevent duplicates on retries.
-								frappe.db.set_value(
-									"RFID Zebra Tag",
-									epc,
-									{"purchase_receipt": se_name, **event_fields},
-									update_modified=True,
-								)
-							_submit_stock_entry(se_name, ant_id=stock_ant, device=str(device or "")[:64])
-							stock_entry_submitted = True
-
-						if stock_entry_submitted:
+					else:
+						# Claim first to avoid double receipts.
+						if _claim_for_processing(epc):
+							tag_payload = {
+								"epc": epc,
+								"item_code": row.get("item_code"),
+								"qty": row.get("qty"),
+								"uom": row.get("uom"),
+								"event_id": event_id,
+								"batch_id": batch_id,
+								"seq": seq,
+							}
+							se_name = _create_stock_entry_draft_for_tag(
+								tag_payload,
+								ant_id=stock_ant,
+								device=str(device or "")[:64],
+								idempotency_key=idempotency_key,
+								key_type=key_type,
+							)
+							# Persist draft name even if submit fails, to prevent duplicates on retries.
 							frappe.db.set_value(
 								"RFID Zebra Tag",
 								epc,
-								{
-									"status": "Consumed",
-									"purchase_receipt": se_name,
-									"consumed_at": frappe.utils.now_datetime(),
-									"consumed_device": str(device or "")[:64],
-									"last_error": "",
-									**event_fields,
-								},
+								{"purchase_receipt": se_name, **event_fields},
 								update_modified=True,
 							)
+							_submit_stock_entry(se_name, ant_id=stock_ant, device=str(device or "")[:64])
+							stock_entry_submitted = True
+
+					if stock_entry_submitted:
+						frappe.db.set_value(
+							"RFID Zebra Tag",
+							epc,
+							{
+								"status": "Consumed",
+								"purchase_receipt": se_name,
+								"consumed_at": frappe.utils.now_datetime(),
+								"consumed_device": str(device or "")[:64],
+								"last_error": "",
+								**event_fields,
+							},
+							update_modified=True,
+						)
 						processed += 1
 				except Exception as exc:
 					_set_error(epc, str(exc))
