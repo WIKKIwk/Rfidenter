@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 import secrets
 from typing import Any
@@ -40,42 +42,73 @@ def _normalize_idempotency_key(raw: Any) -> str:
 	return s[:120]
 
 
-def _make_dedupe_key(raw_key: str, key_type: str, doc_type: str) -> str:
+def _make_dedupe_key(raw_key: str, kind: str) -> str:
 	key = _normalize_idempotency_key(raw_key)
 	if not key:
 		return ""
-	return f"{doc_type}:{key_type}:{key}"[:180]
+	kind_norm = str(kind or "").strip() or "unknown"
+	return f"{kind_norm}:{key}"[:180]
 
 
-def _get_dedupe_doc(idempotency_key: str) -> dict[str, Any] | None:
-	if not idempotency_key:
+def _payload_hash(payload: dict[str, Any]) -> str:
+	try:
+		raw = json.dumps(payload, separators=(",", ":"), sort_keys=True)
+	except Exception:
+		return ""
+	try:
+		return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+	except Exception:
+		return ""
+
+
+def _claim_dedupe(
+	idempotency_key: str,
+	*,
+	kind: str,
+	payload_hash: str,
+	raw_key: str | None = None,
+	key_type: str | None = None,
+	epc: str | None = None,
+) -> frappe.model.document.Document | None:
+	dedupe_key = _make_dedupe_key(idempotency_key, kind)
+	if not dedupe_key:
 		return None
-	row = frappe.db.get_value(
-		"RFID Zebra Dedupe", {"idempotency_key": idempotency_key}, ["doc_type", "doc_name"], as_dict=True
-	)
-	return row if isinstance(row, dict) else None
 
-
-def _insert_dedupe(
-	*, idempotency_key: str, raw_key: str, key_type: str, doc_type: str, doc_name: str, epc: str
-) -> None:
-	if not idempotency_key:
-		return
-	if frappe.db.exists("RFID Zebra Dedupe", {"idempotency_key": idempotency_key}):
-		return
 	doc = frappe.get_doc(
 		{
 			"doctype": "RFID Zebra Dedupe",
-			"idempotency_key": idempotency_key,
-			"raw_key": _normalize_idempotency_key(raw_key),
+			"idempotency_key": dedupe_key,
+			"raw_key": _normalize_idempotency_key(raw_key or idempotency_key),
 			"key_type": str(key_type or "").strip() or None,
-			"doc_type": doc_type,
-			"doc_name": doc_name,
-			"epc": epc,
+			"kind": str(kind or "").strip() or None,
+			"status": "CLAIMED",
+			"payload_hash": payload_hash or "",
+			"epc": str(epc or "")[:128],
 			"created_at": frappe.utils.now_datetime(),
 		}
 	)
-	doc.insert(ignore_permissions=True)
+	try:
+		doc.insert(ignore_permissions=True)
+		return doc
+	except Exception as exc:
+		if isinstance(exc, frappe.DuplicateEntryError) or "Duplicate entry" in str(exc):
+			try:
+				return frappe.get_doc("RFID Zebra Dedupe", dedupe_key)
+			except Exception:
+				return None
+		raise
+
+
+def _finish_dedupe(
+	doc: frappe.model.document.Document | None, *, doc_type: str, doc_name: str | None, status: str, error: str | None
+) -> None:
+	if not doc:
+		return
+	doc.doc_type = doc_type
+	doc.doc_name = doc_name or ""
+	doc.status = status
+	doc.last_error = str(error or "")[:500] if status == "FAILED" else ""
+	doc.save(ignore_permissions=True)
 
 
 def _get_site_setting(key: str, default: Any = None) -> Any:
@@ -431,11 +464,36 @@ def _create_stock_entry_draft_for_tag(
 	if not item_code or qty <= 0 or not uom:
 		raise ValueError("Tag meta noto‘g‘ri.")
 
-	if idempotency_key and key_type:
-		dedupe_key = _make_dedupe_key(idempotency_key, key_type, "Stock Entry")
-		existing = _get_dedupe_doc(dedupe_key)
-		if existing and existing.get("doc_name"):
-			return str(existing.get("doc_name"))
+	claim = None
+	if idempotency_key:
+		payload_hash = _payload_hash(
+			{
+				"item_code": item_code,
+				"qty": qty,
+				"uom": uom,
+				"ant_id": ant_id,
+				"device": str(device or "")[:64],
+				"epc": str(tag.get("epc") or ""),
+			}
+		)
+		claim = _claim_dedupe(
+			idempotency_key,
+			kind="stock_entry",
+			payload_hash=payload_hash,
+			raw_key=idempotency_key,
+			key_type=key_type,
+			epc=str(tag.get("epc") or ""),
+		)
+		if claim:
+			doc_name = str(getattr(claim, "doc_name", "") or "")
+			doc_type = str(getattr(claim, "doc_type", "") or "")
+			status = str(getattr(claim, "status", "") or "")
+			if doc_type == "Stock Entry" and doc_name:
+				return doc_name
+			if status == "CLAIMED":
+				raise frappe.ValidationError("Stock Entry dedupe claimed.")
+			if status == "FAILED":
+				raise frappe.ValidationError("Stock Entry dedupe failed.")
 
 	settings_name = frappe.db.get_value("RFID Zebra Item Receipt Setting", {"item_code": item_code}, "name")
 	if not settings_name:
@@ -480,17 +538,13 @@ def _create_stock_entry_draft_for_tag(
 
 	se_doc = frappe.get_doc(values)
 
-	se_doc.insert(ignore_permissions=True)
-	if idempotency_key and key_type:
-		_insert_dedupe(
-			idempotency_key=_make_dedupe_key(idempotency_key, key_type, "Stock Entry"),
-			raw_key=idempotency_key,
-			key_type=key_type,
-			doc_type="Stock Entry",
-			doc_name=se_doc.name,
-			epc=str(tag.get("epc") or ""),
-		)
-	return se_doc.name
+	try:
+		se_doc.insert(ignore_permissions=True)
+		_finish_dedupe(claim, doc_type="Stock Entry", doc_name=se_doc.name, status="DONE", error=None)
+		return se_doc.name
+	except Exception as exc:
+		_finish_dedupe(claim, doc_type="Stock Entry", doc_name=None, status="FAILED", error=str(exc))
+		raise
 
 
 def _create_delivery_note_draft_for_tag(
@@ -502,11 +556,36 @@ def _create_delivery_note_draft_for_tag(
 	if not item_code or qty <= 0 or not uom:
 		raise ValueError("Tag meta noto‘g‘ri.")
 
-	if idempotency_key and key_type:
-		dedupe_key = _make_dedupe_key(idempotency_key, key_type, "Delivery Note")
-		existing = _get_dedupe_doc(dedupe_key)
-		if existing and existing.get("doc_name"):
-			return str(existing.get("doc_name"))
+	claim = None
+	if idempotency_key:
+		payload_hash = _payload_hash(
+			{
+				"item_code": item_code,
+				"qty": qty,
+				"uom": uom,
+				"ant_id": ant_id,
+				"device": str(device or "")[:64],
+				"epc": str(tag.get("epc") or ""),
+			}
+		)
+		claim = _claim_dedupe(
+			idempotency_key,
+			kind="delivery_note",
+			payload_hash=payload_hash,
+			raw_key=idempotency_key,
+			key_type=key_type,
+			epc=str(tag.get("epc") or ""),
+		)
+		if claim:
+			doc_name = str(getattr(claim, "doc_name", "") or "")
+			doc_type = str(getattr(claim, "doc_type", "") or "")
+			status = str(getattr(claim, "status", "") or "")
+			if doc_type == "Delivery Note" and doc_name:
+				return doc_name
+			if status == "CLAIMED":
+				raise frappe.ValidationError("Delivery Note dedupe claimed.")
+			if status == "FAILED":
+				raise frappe.ValidationError("Delivery Note dedupe failed.")
 
 	settings_name = frappe.db.get_value("RFID Delivery Note Setting", {"item_code": item_code}, "name")
 	if not settings_name:
@@ -558,17 +637,13 @@ def _create_delivery_note_draft_for_tag(
 		dn_doc.set_missing_values()
 	except Exception:
 		pass
-	dn_doc.insert(ignore_permissions=True)
-	if idempotency_key and key_type:
-		_insert_dedupe(
-			idempotency_key=_make_dedupe_key(idempotency_key, key_type, "Delivery Note"),
-			raw_key=idempotency_key,
-			key_type=key_type,
-			doc_type="Delivery Note",
-			doc_name=dn_doc.name,
-			epc=str(tag.get("epc") or ""),
-		)
-	return dn_doc.name
+	try:
+		dn_doc.insert(ignore_permissions=True)
+		_finish_dedupe(claim, doc_type="Delivery Note", doc_name=dn_doc.name, status="DONE", error=None)
+		return dn_doc.name
+	except Exception as exc:
+		_finish_dedupe(claim, doc_type="Delivery Note", doc_name=None, status="FAILED", error=str(exc))
+		raise
 
 
 def _submit_delivery_note(dn_name: str, *, ant_id: int, device: str) -> None:

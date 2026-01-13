@@ -1626,12 +1626,28 @@ def agent_poll(agent_id: str = "", max_items: Any | None = None, **kwargs) -> di
 		limit = 5
 	limit = max(1, min(25, limit))
 
-	rows = frappe.get_all(
-		"RFID Agent Request",
-		fields=["request_id", "agent_id", "command", "args_json", "timeout_sec", "request_ts", "requested_by"],
-		filters={"agent_id": agent, "status": "Queued"},
-		order_by="creation asc",
-		limit=limit,
+	rows = frappe.db.sql(
+		"""
+		SELECT
+			`name`,
+			`request_id`,
+			`agent_id`,
+			`command`,
+			`args_json`,
+			`timeout_sec`,
+			`request_ts`,
+			`requested_by`
+		FROM `tabRFID Agent Request`
+		WHERE `agent_id`=%s
+		  AND (
+				`status`='Queued'
+				OR (`status`='Sent' AND (`lease_expires_at` IS NULL OR `lease_expires_at` < NOW()))
+			)
+		ORDER BY `creation` ASC
+		LIMIT %s
+		""",
+		(agent, limit),
+		as_dict=True,
 	)
 
 	commands: list[dict[str, Any]] = []
@@ -1639,13 +1655,20 @@ def agent_poll(agent_id: str = "", max_items: Any | None = None, **kwargs) -> di
 		req_id = str(row.get("request_id") or "").strip()
 		if not req_id:
 			continue
+		lease_sec = int(row.get("timeout_sec") or 30)
+		if lease_sec <= 0:
+			lease_sec = 30
 		frappe.db.sql(
 			"""
 			UPDATE `tabRFID Agent Request`
-			SET `status`='Sent', `sent_at`=NOW()
-			WHERE `name`=%s AND `status`='Queued'
+			SET `status`='Sent', `sent_at`=NOW(), `lease_expires_at`=DATE_ADD(NOW(), INTERVAL %s SECOND)
+			WHERE `name`=%s
+			  AND (
+					`status`='Queued'
+					OR (`status`='Sent' AND (`lease_expires_at` IS NULL OR `lease_expires_at` < NOW()))
+				)
 			""",
-			(req_id,),
+			(lease_sec, row.get("name") or req_id),
 		)
 		try:
 			if not getattr(frappe.db, "_cursor", None) or frappe.db._cursor.rowcount <= 0:
@@ -1715,10 +1738,11 @@ def agent_reply(
 		"ts": _now_ms(),
 	}
 
-	doc.status = "Done" if is_ok else "Error"
+	doc.status = "Done" if is_ok else "Failed"
 	doc.ok = 1 if is_ok else 0
 	doc.result_json = _json_dump(result) if is_ok else ""
 	doc.error = str(error or "") if not is_ok else ""
+	doc.lease_expires_at = None
 	doc.replied_at = frappe.utils.now_datetime()
 	doc.save(ignore_permissions=True)
 
@@ -1758,12 +1782,14 @@ def agent_result(request_id: str = "") -> dict[str, Any]:
 	timeout = int(doc.timeout_sec or 0)
 	if timeout > 0 and doc.request_ts:
 		if _now_ms() - int(doc.request_ts or 0) > timeout * 1000:
-			if doc.status not in ("Done", "Error", "Expired"):
-				doc.status = "Expired"
+			if doc.status not in ("Done", "Failed"):
+				doc.status = "Failed"
+				doc.error = "timeout"
+				doc.lease_expires_at = None
 				doc.save(ignore_permissions=True)
 			return {"ok": True, "state": "expired"}
 
-	if doc.status in ("Done", "Error"):
+	if doc.status in ("Done", "Failed"):
 		result_obj: Any = None
 		try:
 			result_obj = json.loads(doc.result_json) if doc.result_json else None

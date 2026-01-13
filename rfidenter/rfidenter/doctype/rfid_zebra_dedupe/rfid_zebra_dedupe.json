@@ -8,9 +8,13 @@
   "idempotency_key",
   "raw_key",
   "key_type",
+  "kind",
+  "status",
+  "payload_hash",
   "doc_type",
   "doc_name",
   "epc",
+  "last_error",
   "created_at"
  ],
  "fields": [
@@ -36,6 +40,24 @@
    "options": "client_request_id\nevent_id"
   },
   {
+   "fieldname": "kind",
+   "fieldtype": "Select",
+   "label": "Kind",
+   "options": "stock_entry\ndelivery_note"
+  },
+  {
+   "default": "CLAIMED",
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "label": "Status",
+   "options": "CLAIMED\nDONE\nFAILED"
+  },
+  {
+   "fieldname": "payload_hash",
+   "fieldtype": "Data",
+   "label": "Payload Hash"
+  },
+  {
    "fieldname": "doc_type",
    "fieldtype": "Data",
    "label": "Doc Type"
@@ -49,6 +71,11 @@
    "fieldname": "epc",
    "fieldtype": "Data",
    "label": "EPC"
+  },
+  {
+   "fieldname": "last_error",
+   "fieldtype": "Small Text",
+   "label": "Last Error"
   },
   {
    "fieldname": "created_at",

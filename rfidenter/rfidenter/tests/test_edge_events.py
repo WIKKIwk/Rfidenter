@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import frappe
 from frappe.tests.utils import FrappeTestCase
+from erpnext.accounts.test.accounts_mixin import AccountsTestMixin
+from erpnext.stock.doctype.item.test_item import create_item
 
 from rfidenter.rfidenter import api
+from rfidenter.rfidenter import zebra_items
 
 
-class TestEdgeEvents(FrappeTestCase):
+class TestEdgeEvents(FrappeTestCase, AccountsTestMixin):
 	def setUp(self) -> None:
 		frappe.set_user("Administrator")
 		self.device_id = "test-device"
@@ -82,3 +85,66 @@ class TestEdgeEvents(FrappeTestCase):
 		commands = poll.get("commands") or []
 		self.assertEqual(len(commands), 1)
 		self.assertEqual(commands[0].get("request_id"), request_id)
+
+	def test_agent_queue_lease_reclaim(self) -> None:
+		res = api.agent_enqueue(agent_id=self.agent_id, command="ping", args={"a": 1}, timeout_sec=1)
+		request_id = res.get("request_id")
+		self.assertTrue(request_id)
+
+		expired_at = frappe.utils.add_to_date(frappe.utils.now_datetime(), seconds=-5)
+		frappe.db.set_value(
+			"RFID Agent Request",
+			request_id,
+			{"status": "Sent", "lease_expires_at": expired_at},
+			update_modified=False,
+		)
+
+		poll = api.agent_poll(agent_id=self.agent_id, max_items=1)
+		commands = poll.get("commands") or []
+		self.assertEqual(len(commands), 1)
+		self.assertEqual(commands[0].get("request_id"), request_id)
+
+	def test_zebra_dedupe_claim_first(self) -> None:
+		self.create_company()
+		self.create_supplier()
+		self.create_customer()
+
+		item_code = "_RFID Dedupe Item"
+		item = create_item(item_code, is_stock_item=1, warehouse=self.warehouse, company=self.company)
+		uom = item.stock_uom
+
+		if not frappe.db.exists("RFID Zebra Item Receipt Setting", {"item_code": item_code}):
+			frappe.get_doc(
+				{
+					"doctype": "RFID Zebra Item Receipt Setting",
+					"item_code": item_code,
+					"company": self.company,
+					"supplier": self.supplier,
+					"warehouse": self.warehouse,
+					"submit_purchase_receipt": 0,
+				}
+			).insert(ignore_permissions=True)
+
+		if not frappe.db.exists("RFID Delivery Note Setting", {"item_code": item_code}):
+			frappe.get_doc(
+				{
+					"doctype": "RFID Delivery Note Setting",
+					"item_code": item_code,
+					"company": self.company,
+					"customer": self.customer,
+					"warehouse": self.warehouse,
+					"default_rate": 0,
+				}
+			).insert(ignore_permissions=True)
+
+		frappe.db.delete("RFID Zebra Dedupe", {"idempotency_key": "stock_entry:idem-1"})
+
+		tag = {"epc": "EPC1234", "item_code": item_code, "qty": 1, "uom": uom}
+		doc1 = zebra_items._create_stock_entry_draft_for_tag(
+			tag, ant_id=1, device="test", idempotency_key="idem-1", key_type="event_id"
+		)
+		doc2 = zebra_items._create_stock_entry_draft_for_tag(
+			tag, ant_id=1, device="test", idempotency_key="idem-1", key_type="event_id"
+		)
+		self.assertEqual(doc1, doc2)
+		self.assertEqual(frappe.db.count("Stock Entry", {"name": doc1}), 1)

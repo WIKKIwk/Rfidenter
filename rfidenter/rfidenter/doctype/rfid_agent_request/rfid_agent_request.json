@@ -14,6 +14,7 @@
   "timeout_sec",
   "request_ts",
   "sent_at",
+  "lease_expires_at",
   "replied_at",
   "ok",
   "result_json",
@@ -61,7 +62,7 @@
    "fieldtype": "Select",
    "in_list_view": 1,
    "label": "Status",
-   "options": "Queued\nSent\nDone\nError\nExpired"
+   "options": "Queued\nSent\nDone\nFailed"
   },
   {
    "fieldname": "timeout_sec",
@@ -77,6 +78,11 @@
    "fieldname": "sent_at",
    "fieldtype": "Datetime",
    "label": "Sent At"
+  },
+  {
+   "fieldname": "lease_expires_at",
+   "fieldtype": "Datetime",
+   "label": "Lease Expires At"
   },
   {
    "fieldname": "replied_at",
