@@ -12,6 +12,8 @@ from rfidenter.rfidenter import zebra_items
 
 
 class TestAntennaFlow(FrappeTestCase, AccountsTestMixin):
+	EPC_PREFIX = "E2AB"
+
 	def setUp(self) -> None:
 		frappe.set_user("Administrator")
 		companies = frappe.db.get_all("Company", pluck="name", limit=1)
@@ -28,7 +30,7 @@ class TestAntennaFlow(FrappeTestCase, AccountsTestMixin):
 		self.batch_id = "ant-batch-test"
 		frappe.db.delete("RFID Edge Event", {"device_id": self.device_id})
 		frappe.db.delete("RFID Batch State", {"device_id": self.device_id})
-		frappe.db.delete("RFID Zebra Tag", {"epc": ["like", "EPC-ANT-%"]})
+		frappe.db.delete("RFID Zebra Tag", {"epc": ["like", f"{self.EPC_PREFIX}%"]})
 		frappe.db.delete("RFID Antenna Rule", {"device": self.device_id})
 
 	def _ensure_master_data(self, item_code: str) -> str:
@@ -102,7 +104,7 @@ class TestAntennaFlow(FrappeTestCase, AccountsTestMixin):
 		item_code = "_RFID ANT NOEVENT"
 		uom = self._ensure_master_data(item_code)
 		self._ensure_rule()
-		epc = "EPC-ANT-NOEVT"
+		epc = f"{self.EPC_PREFIX}000000000001"
 		self._create_tag(epc=epc, item_code=item_code, uom=uom, status="Printed", printed=True)
 
 		res = api.ingest_tags(device=self.device_id, tags=[{"epcId": epc, "antId": 1, "count": 1}])
@@ -113,7 +115,7 @@ class TestAntennaFlow(FrappeTestCase, AccountsTestMixin):
 		item_code = "_RFID ANT NOTPRINTED"
 		uom = self._ensure_master_data(item_code)
 		self._ensure_rule()
-		epc = "EPC-ANT-NOPRINT"
+		epc = f"{self.EPC_PREFIX}000000000002"
 		self._create_tag(epc=epc, item_code=item_code, uom=uom, status="Pending Print", printed=False)
 
 		res = api.ingest_tags(
@@ -130,7 +132,7 @@ class TestAntennaFlow(FrappeTestCase, AccountsTestMixin):
 		item_code = "_RFID ANT DUP"
 		uom = self._ensure_master_data(item_code)
 		self._ensure_rule()
-		epc = "EPC-ANT-DUP"
+		epc = f"{self.EPC_PREFIX}000000000003"
 		self._create_tag(epc=epc, item_code=item_code, uom=uom, status="Printed", printed=True)
 
 		api._insert_edge_event(
@@ -165,7 +167,7 @@ class TestAntennaFlow(FrappeTestCase, AccountsTestMixin):
 		item_code = "_RFID ANT SCANREQ"
 		uom = self._ensure_master_data(item_code)
 		self._ensure_rule()
-		epc = "EPC-ANT-SCANREQ"
+		epc = f"{self.EPC_PREFIX}000000000004"
 		self._create_tag(
 			epc=epc,
 			item_code=item_code,
@@ -189,7 +191,7 @@ class TestAntennaFlow(FrappeTestCase, AccountsTestMixin):
 		item_code = "_RFID ANT PRINTED"
 		uom = self._ensure_master_data(item_code)
 		self._ensure_rule()
-		epc = "EPC-ANT-PRINTED"
+		epc = f"{self.EPC_PREFIX}000000000005"
 		self._create_tag(epc=epc, item_code=item_code, uom=uom, status="Printed", printed=True)
 
 		res1 = api.ingest_tags(
@@ -257,7 +259,7 @@ class TestAntennaFlow(FrappeTestCase, AccountsTestMixin):
 			self.skipTest("dedup disabled")
 
 		device = "DEV 1"
-		epc = "EPC-ANT-DEDUP"
+		epc = f"{self.EPC_PREFIX}000000000006"
 		ant_id = 1
 		expected_key = f"{api.SEEN_PREFIX}{api._normalize_device_id(device) or device}:{ant_id}:{epc}"
 		sanitized_key = f"{api.SEEN_PREFIX}{api._sanitize_agent_id(device) or device}:{ant_id}:{epc}"
@@ -295,7 +297,7 @@ class TestAntennaFlow(FrappeTestCase, AccountsTestMixin):
 			event_id="evt-ant-seq-2",
 			batch_id=self.batch_id,
 			seq=4,
-			tags=[{"epcId": "EPC-ANT-SEQ", "antId": 1, "count": 1}],
+			tags=[{"epcId": f"{self.EPC_PREFIX}000000000007", "antId": 1, "count": 1}],
 		)
 		self.assertFalse(res.get("ok"))
 		self.assertEqual(res.get("code"), "SEQ_REGRESSION")
