@@ -951,6 +951,49 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 			lastTs: 0,
 			timer: null,
 		};
+		const batchControl = { product: null };
+
+		function getDeviceId() {
+			const raw = String($batchDevice.val() || "").trim();
+			if (raw) return raw;
+			const stored = String(window.localStorage.getItem(STORAGE_DEVICE_ID) || "").trim();
+			if (stored && $batchDevice.length) $batchDevice.val(stored);
+			return stored;
+		}
+
+		function setDeviceId(value) {
+			const v = String(value || "").trim();
+			window.localStorage.setItem(STORAGE_DEVICE_ID, v);
+			if ($batchDevice.length) $batchDevice.val(v);
+		}
+
+		function getBatchId() {
+			const raw = String($batchId.val() || "").trim();
+			if (raw) return raw;
+			const stored = String(window.localStorage.getItem(STORAGE_BATCH_ID) || "").trim();
+			if (stored && $batchId.length) $batchId.val(stored);
+			return stored;
+		}
+
+		function setBatchId(value) {
+			const v = String(value || "").trim();
+			window.localStorage.setItem(STORAGE_BATCH_ID, v);
+			if ($batchId.length) $batchId.val(v);
+		}
+
+		function getBatchProduct() {
+			const raw = String(batchControl.product?.get_value?.() || "").trim();
+			if (raw) return raw;
+			const stored = String(window.localStorage.getItem(STORAGE_BATCH_PRODUCT) || "").trim();
+			if (stored && batchControl.product) batchControl.product.set_value(stored);
+			return stored;
+		}
+
+		function setBatchProduct(value) {
+			const v = String(value || "").trim();
+			window.localStorage.setItem(STORAGE_BATCH_PRODUCT, v);
+			if (batchControl.product) batchControl.product.set_value(v);
+		}
 
 		function sanitizeZplText(value) {
 			const s = String(value ?? "").trim();
