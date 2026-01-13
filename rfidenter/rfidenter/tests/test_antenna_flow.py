@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import secrets
+import datetime
 from unittest.mock import patch
 
 import frappe
 from frappe.tests.utils import FrappeTestCase
 from erpnext.stock.doctype.item.test_item import create_item
+from frappe.utils.data import convert_utc_to_system_timezone
 
 from rfidenter.rfidenter import api
 
@@ -68,12 +70,27 @@ class TestAntennaFlow(FrappeTestCase):
 	def _safe_select_option(self, doctype: str, fieldname: str, preferred: str) -> str:
 		meta = frappe.get_meta(doctype)
 		field = meta.get_field(fieldname)
-		options = [o.strip() for o in str(getattr(field, "options", "") or "").splitlines() if o.strip()]
-		if preferred in options:
-			return preferred
-		if options:
-			return options[0]
-		raise AssertionError(f"Missing options for {doctype}.{fieldname}")
+		raw = str(getattr(field, "options", "") or "")
+		placeholders = {"", "-", "---", "select", "none", "null"}
+		valid: list[str] = []
+		for option in raw.splitlines():
+			opt = option.strip()
+			if not opt:
+				continue
+			if opt.lower() in placeholders:
+				continue
+			valid.append(opt)
+
+		preferred_norm = str(preferred or "").strip()
+		if preferred_norm:
+			for opt in valid:
+				if opt.lower() == preferred_norm.lower():
+					return opt
+
+		if valid:
+			return valid[0]
+
+		raise AssertionError(f"Missing non-placeholder options for {doctype}.{fieldname}")
 
 	def _ensure_currency(self, code: str) -> str:
 		if frappe.db.exists("Currency", code):
@@ -151,14 +168,68 @@ class TestAntennaFlow(FrappeTestCase):
 	def _ensure_accounts(self) -> None:
 		company = frappe.get_doc("Company", self.company)
 
-		expense_parent = frappe.db.get_value(
-			"Account",
-			{"company": self.company, "root_type": "Expense", "is_group": 1},
-			"name",
-			order_by="lft asc",
-		)
+		attempted_default_accounts = False
+
+		def _get_root_parent(root_type: str) -> str | None:
+			return frappe.db.get_value(
+				"Account",
+				{"company": self.company, "root_type": root_type, "is_group": 1},
+				"name",
+				order_by="lft asc",
+			)
+
+		def _try_default_accounts() -> None:
+			nonlocal attempted_default_accounts
+			if attempted_default_accounts:
+				return
+			attempted_default_accounts = True
+			try:
+				company.create_default_accounts()
+			except Exception:
+				pass
+
+		def _ensure_min_root_account(*, root_type: str, report_type: str, account_name: str) -> str:
+			existing = frappe.db.get_value(
+				"Account",
+				{"company": self.company, "account_name": account_name, "is_group": 1},
+				"name",
+			)
+			if existing:
+				return existing
+			try:
+				doc = frappe.get_doc(
+					{
+						"doctype": "Account",
+						"account_name": account_name,
+						"is_group": 1,
+						"root_type": root_type,
+						"report_type": report_type,
+						"company": self.company,
+					}
+				).insert(ignore_permissions=True)
+			except Exception as exc:
+				raise AssertionError(f"Minimal root account creation failed ({root_type}): {exc}") from exc
+			return doc.name
+
+		expense_parent = _get_root_parent("Expense")
+		asset_parent = _get_root_parent("Asset")
+		if not expense_parent or not asset_parent:
+			_try_default_accounts()
+			expense_parent = expense_parent or _get_root_parent("Expense")
+			asset_parent = asset_parent or _get_root_parent("Asset")
+
 		if not expense_parent:
-			raise AssertionError("Expense parent account missing for test company.")
+			expense_parent = _ensure_min_root_account(
+				root_type="Expense",
+				report_type="Profit and Loss",
+				account_name=f"{self.TEST_PREFIX} Root Expense",
+			)
+		if not asset_parent:
+			asset_parent = _ensure_min_root_account(
+				root_type="Asset",
+				report_type="Balance Sheet",
+				account_name=f"{self.TEST_PREFIX} Root Asset",
+			)
 
 		expense_root = frappe.db.get_value(
 			"Account",
@@ -202,15 +273,6 @@ class TestAntennaFlow(FrappeTestCase):
 			except Exception as exc:
 				raise AssertionError(f"Stock adjustment account creation failed: {exc}") from exc
 			stock_adj = stock_adj_doc.name
-
-		asset_parent = frappe.db.get_value(
-			"Account",
-			{"company": self.company, "root_type": "Asset", "is_group": 1},
-			"name",
-			order_by="lft asc",
-		)
-		if not asset_parent:
-			raise AssertionError("Asset parent account missing for test company.")
 
 		asset_root = frappe.db.get_value(
 			"Account",
@@ -591,7 +653,10 @@ class TestAntennaFlow(FrappeTestCase):
 		)
 		state.insert(ignore_permissions=True)
 
-		day = frappe.utils.today()
+		ts_epoch = 1730000000
+		day = convert_utc_to_system_timezone(
+			datetime.datetime.fromtimestamp(ts_epoch, tz=datetime.timezone.utc)
+		).date().isoformat()
 		edge_before = frappe.db.count("RFID Edge Event", {"device_id": self.device_id})
 		state_before = frappe.db.get_value(
 			"RFID Batch State",
@@ -622,14 +687,15 @@ class TestAntennaFlow(FrappeTestCase):
 		)
 
 		with patch("frappe.publish_realtime") as publish:
-			res = api.ingest_tags(
-				device=self.device_id,
-				event_id=event_id,
-				batch_id=self.batch_id,
-				seq=1,
-				tags=[{"epcId": epc, "antId": 1, "count": 1}],
-			)
-			publish.assert_not_called()
+				res = api.ingest_tags(
+					device=self.device_id,
+					event_id=event_id,
+					batch_id=self.batch_id,
+					seq=1,
+					ts=ts_epoch,
+					tags=[{"epcId": epc, "antId": 1, "count": 1}],
+				)
+				publish.assert_not_called()
 
 		self.assertTrue(res.get("duplicate"))
 		edge_after = frappe.db.count("RFID Edge Event", {"device_id": self.device_id})
@@ -803,6 +869,7 @@ class TestAntennaFlow(FrappeTestCase):
 		original_set_value = CacheCls.set_value
 
 		def _capture_set_value(self, key, value, *args, **kwargs):
+			assert original_set_value is not CacheCls.set_value, "Recursion guard: original_set_value was patched"
 			set_keys.append(key)
 			return original_set_value(self, key, value, *args, **kwargs)
 
