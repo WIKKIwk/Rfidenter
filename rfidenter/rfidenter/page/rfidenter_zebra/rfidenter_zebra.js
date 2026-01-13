@@ -86,6 +86,9 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 	const STORAGE_BATCH_ID = "rfidenter.edge.batch_id";
 	const STORAGE_BATCH_PRODUCT = "rfidenter.edge.product_id";
 	const DEFAULT_ZEBRA_URL = "http://127.0.0.1:18000";
+	const BATCH_POLL_INTERVAL_MS = 2000;
+	const BATCH_BACKOFF_BASE_MS = 1000;
+	const BATCH_BACKOFF_MAX_MS = 30000;
 
 	const state = {
 		connMode: String(window.localStorage.getItem(STORAGE_CONN_MODE) || "agent"),
@@ -98,7 +101,14 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 		devices: [],
 		result: null,
 		mode: "manual",
-		batch: { lastEventSeq: null, authBlocked: false, pollTimer: null },
+		batch: {
+			lastEventSeq: null,
+			authBlocked: false,
+			pollTimer: null,
+			pollTimeout: null,
+			backoffCount: 0,
+			pollMode: "",
+		},
 	};
 	let autoFallbackAllowed = true;
 	let autoFallbackTried = false;
@@ -642,6 +652,9 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 							<span class="rfz-pill rfz-batch-status"></span>
 							<span class="rfz-pill rfz-device-status"></span>
 						</div>
+						<div class="alert alert-danger rfz-auth-banner" style="display:none; margin-top: 10px">
+							Auth required
+						</div>
 
 						<div class="rfz-batch-grid" style="margin-top: 12px">
 							<div class="rfz-batch-field">
@@ -894,6 +907,7 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 	const $batchState = $body.find(".rfz-batch-state");
 	const $batchStatus = $body.find(".rfz-batch-status");
 	const $batchDeviceStatus = $body.find(".rfz-device-status");
+	const $authBanner = $body.find(".rfz-auth-banner");
 	const $batchLastSeen = $body.find(".rfz-last-seen");
 	const $batchLastSeq = $body.find(".rfz-last-seq");
 	const $batchCurrentBatch = $body.find(".rfz-current-batch");
@@ -1640,15 +1654,15 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 			else $el.removeAttr("title");
 		}
 
-		function setBatchControlsEnabled(enabled) {
-			const disabled = !enabled;
-			$batchStart.prop("disabled", disabled);
-			$batchStop.prop("disabled", disabled);
-			$batchSwitch.prop("disabled", disabled);
-			$batchDevice.prop("disabled", disabled);
-			$batchId.prop("disabled", disabled);
-			batchControl.product?.$input?.prop("disabled", disabled);
-		}
+	function setBatchControlsEnabled(enabled) {
+		const disabled = !enabled || state.batch.authBlocked;
+		$batchStart.prop("disabled", disabled);
+		$batchStop.prop("disabled", disabled);
+		$batchSwitch.prop("disabled", disabled);
+		$batchDevice.prop("disabled", disabled);
+		$batchId.prop("disabled", disabled);
+		batchControl.product?.$input?.prop("disabled", disabled);
+	}
 
 		function syncDeviceIdFromAgent() {
 			if (!$batchDevice.length) return;
@@ -1665,15 +1679,60 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 			return Number.isFinite(n) ? n : null;
 		}
 
-		function setBatchQueue($el, raw) {
-			const n = normalizeQueueDepth(raw);
-			$el.text(Number.isFinite(n) ? String(n) : "N/A");
-		}
+	function setBatchQueue($el, raw) {
+		const n = normalizeQueueDepth(raw);
+		$el.text(Number.isFinite(n) ? String(n) : "N/A");
+	}
 
-		function nextBatchSeq() {
-			const last = Number(state.batch.lastEventSeq);
-			return Number.isFinite(last) ? last + 1 : 0;
+	function setAuthBanner(show, message) {
+		if (!$authBanner.length) return;
+		if (show) {
+			$authBanner.text(message || "Auth required");
+			$authBanner.show();
+		} else {
+			$authBanner.hide();
 		}
+	}
+
+	function stopBatchPolling() {
+		if (state.batch.pollTimer) {
+			window.clearInterval(state.batch.pollTimer);
+			state.batch.pollTimer = null;
+		}
+		if (state.batch.pollTimeout) {
+			window.clearTimeout(state.batch.pollTimeout);
+			state.batch.pollTimeout = null;
+		}
+		state.batch.pollMode = "";
+	}
+
+	function startBatchPolling() {
+		if (state.batch.authBlocked) return;
+		stopBatchPolling();
+		state.batch.pollMode = "interval";
+		state.batch.pollTimer = window.setInterval(() => pollDeviceStatus({ quiet: true }), BATCH_POLL_INTERVAL_MS);
+	}
+
+	function resetBatchBackoff() {
+		state.batch.backoffCount = 0;
+		if (state.batch.pollMode === "backoff") startBatchPolling();
+	}
+
+	function scheduleBatchBackoff() {
+		if (state.batch.authBlocked) return;
+		const next = Math.min(state.batch.backoffCount + 1, 6);
+		state.batch.backoffCount = next;
+		const delay = Math.min(BATCH_BACKOFF_MAX_MS, BATCH_BACKOFF_BASE_MS * Math.pow(2, next - 1));
+		if (state.batch.pollTimer) {
+			window.clearInterval(state.batch.pollTimer);
+			state.batch.pollTimer = null;
+		}
+		if (state.batch.pollTimeout) window.clearTimeout(state.batch.pollTimeout);
+		state.batch.pollMode = "backoff";
+		state.batch.pollTimeout = window.setTimeout(() => {
+			pollDeviceStatus({ quiet: true }).catch(() => {});
+		}, delay);
+	}
 
 		function parseCallError(err) {
 			const response = err?.responseJSON || {};
@@ -1686,19 +1745,26 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 			return { status, code, errorText, excType, serverMessages };
 		}
 
-		function isAuthError(info) {
-			if (!info) return false;
-			if (info.status === 401 || info.status === 403) return true;
-			if (info.excType === "PermissionError") return true;
-			const msg = `${info.errorText || ""} ${info.serverMessages || ""}`.toLowerCase();
-			return msg.includes("token") || msg.includes("rfider");
-		}
+	function isAuthError(info) {
+		if (!info) return false;
+		if (info.status === 401 || info.status === 403) return true;
+		if (info.excType === "PermissionError") return true;
+		const msg = `${info.errorText || ""} ${info.serverMessages || ""}`.toLowerCase();
+		return msg.includes("token") || msg.includes("rfider");
+	}
 
-		function showBatchConflict(info) {
-			const raw = String(info?.code || "").trim();
-			let code = raw;
-			if (!code) {
-				const msg = String(info?.errorText || "").toLowerCase();
+	function setAuthBlocked(blocked, message) {
+		state.batch.authBlocked = blocked;
+		setBatchControlsEnabled(!blocked);
+		setAuthBanner(blocked, message || "Auth required");
+		if (blocked) stopBatchPolling();
+	}
+
+	function showBatchConflict(info) {
+		const raw = String(info?.code || "").trim();
+		let code = raw;
+		if (!code) {
+			const msg = String(info?.errorText || "").toLowerCase();
 				if (msg.includes("batch mismatch")) code = "BATCH_MISMATCH";
 				else if (msg.includes("product mismatch")) code = "PRODUCT_MISMATCH";
 				else if (msg.includes("seq")) code = "SEQ_REGRESSION";
@@ -1712,24 +1778,28 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 			});
 		}
 
-		function showBatchError(err) {
-			const info = parseCallError(err);
-			if (isAuthError(info)) {
-				state.batch.authBlocked = true;
-				setBatchControlsEnabled(false);
-				setPill($batchStatus, "Auth error", { indicator: "red", title: info?.errorText || "" });
-				frappe.msgprint({
-					title: "Auth error",
-					message: escapeHtml(info?.errorText || "Token/role xato."),
-					indicator: "red",
-				});
-				return;
-			}
-			if (info.status === 409) {
-				showBatchConflict(info);
-				return;
-			}
-			setPill($batchStatus, "Xato", { indicator: "orange", title: info?.errorText || "" });
+	function showBatchError(err) {
+		const info = parseCallError(err);
+		if (isAuthError(info)) {
+			setAuthBlocked(true, "Auth required");
+			setPill($batchStatus, "Auth error", { indicator: "red", title: info?.errorText || "" });
+			frappe.msgprint({
+				title: "Auth error",
+				message: escapeHtml(info?.errorText || "Token/role xato."),
+				indicator: "red",
+			});
+			return;
+		}
+		if (info.status === 429 || info.status === 503) {
+			scheduleBatchBackoff();
+			setPill($batchStatus, "Backoff", { indicator: "orange", title: info?.errorText || "" });
+			return;
+		}
+		if (info.status === 409) {
+			showBatchConflict(info);
+			return;
+		}
+		setPill($batchStatus, "Xato", { indicator: "orange", title: info?.errorText || "" });
 			if (info?.errorText) {
 				frappe.msgprint({ title: "Batch xatosi", message: escapeHtml(info.errorText), indicator: "red" });
 			}
@@ -1770,10 +1840,10 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 			setBatchQueue($batchQueueAgent, agentDepth);
 		}
 
-		async function fetchBatchState(deviceId) {
-			try {
-				const r = await frappe.call("frappe.client.get_value", {
-					doctype: "RFID Batch State",
+	async function fetchBatchState(deviceId) {
+		try {
+			const r = await frappe.call("frappe.client.get_value", {
+				doctype: "RFID Batch State",
 					filters: { device_id: deviceId },
 					fieldname: [
 						"status",
@@ -1787,10 +1857,37 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 					as_dict: 1,
 				});
 				return r?.message || null;
-			} catch {
+		} catch {
+			return null;
+		}
+	}
+
+	async function fetchDeviceStatus(deviceId, batchId) {
+		const payload = { event_id: newEventId(), device_id: deviceId };
+		if (batchId) payload.batch_id = batchId;
+		const r = await frappe.call("rfidenter.device_status", payload);
+		const msg = r?.message;
+		if (!msg || msg.ok !== true) throw new Error("Status olinmadi");
+		return msg;
+	}
+
+	async function getNextBatchSeq(deviceId, batchId) {
+		try {
+			const msg = await fetchDeviceStatus(deviceId, batchId);
+			const stateData = msg.state || (await fetchBatchState(deviceId));
+			if (!stateData) {
+				setPill($batchStatus, "State topilmadi", { indicator: "orange" });
 				return null;
 			}
+			renderBatchState(stateData, msg);
+			const last = Number(stateData?.last_event_seq);
+			if (!Number.isFinite(last)) return 0;
+			return last + 1;
+		} catch (err) {
+			showBatchError(err);
+			return null;
 		}
+	}
 
 		async function pollDeviceStatus({ quiet = false } = {}) {
 			if (state.batch.authBlocked) return;
@@ -1801,23 +1898,21 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 				return;
 			}
 			setBatchControlsEnabled(true);
+			setAuthBanner(false);
 			try {
-				const payload = { event_id: newEventId(), device_id: deviceId };
 				const batchId = getBatchId();
-				if (batchId) payload.batch_id = batchId;
-				const r = await frappe.call("rfidenter.device_status", payload);
-				const msg = r?.message;
-				if (!msg || msg.ok !== true) throw new Error("Status olinmadi");
+				const msg = await fetchDeviceStatus(deviceId, batchId);
+				resetBatchBackoff();
 				const stateData = msg.state || (await fetchBatchState(deviceId));
 				if (stateData) {
 					renderBatchState(stateData, msg);
 					setPill($batchStatus, "");
 				} else if (!quiet) {
-					setPill($batchStatus, "State topilmadi", { indicator: "orange" });
-				}
-			} catch (err) {
-				showBatchError(err);
+				setPill($batchStatus, "State topilmadi", { indicator: "orange" });
 			}
+		} catch (err) {
+			showBatchError(err);
+		}
 		}
 
 		async function callBatchEndpoint(method, payload) {
@@ -1840,11 +1935,13 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 			if (!batchId) return setPill($batchStatus, "Batch ID kerak", { indicator: "orange" });
 			if (!productId) return setPill($batchStatus, "Product tanlang", { indicator: "orange" });
 			setPill($batchStatus, "Start...", { indicator: "gray" });
+			const seq = await getNextBatchSeq(deviceId, batchId);
+			if (seq === null) return;
 			const payload = {
 				event_id: newEventId(),
 				device_id: deviceId,
 				batch_id: batchId,
-				seq: nextBatchSeq(),
+				seq,
 				product_id: productId,
 			};
 			const msg = await callBatchEndpoint("rfidenter.edge_batch_start", payload);
@@ -1857,11 +1954,13 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 			if (!deviceId) return setPill($batchStatus, "Device ID kerak", { indicator: "orange" });
 			if (!batchId) return setPill($batchStatus, "Batch ID kerak", { indicator: "orange" });
 			setPill($batchStatus, "Stop...", { indicator: "gray" });
+			const seq = await getNextBatchSeq(deviceId, batchId);
+			if (seq === null) return;
 			const payload = {
 				event_id: newEventId(),
 				device_id: deviceId,
 				batch_id: batchId,
-				seq: nextBatchSeq(),
+				seq,
 			};
 			const msg = await callBatchEndpoint("rfidenter.edge_batch_stop", payload);
 			if (msg) pollDeviceStatus({ quiet: true });
@@ -1875,11 +1974,13 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 			if (!batchId) return setPill($batchStatus, "Batch ID kerak", { indicator: "orange" });
 			if (!productId) return setPill($batchStatus, "Product tanlang", { indicator: "orange" });
 			setPill($batchStatus, "Switch...", { indicator: "gray" });
+			const seq = await getNextBatchSeq(deviceId, batchId);
+			if (seq === null) return;
 			const payload = {
 				event_id: newEventId(),
 				device_id: deviceId,
 				batch_id: batchId,
-				seq: nextBatchSeq(),
+				seq,
 				product_id: productId,
 			};
 			const msg = await callBatchEndpoint("rfidenter.edge_product_switch", payload);
@@ -2526,10 +2627,23 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 		}
 		refreshAll({ quiet: true });
 		try {
-			if (state.batch.pollTimer) window.clearInterval(state.batch.pollTimer);
-			state.batch.pollTimer = window.setInterval(() => pollDeviceStatus({ quiet: true }), 2000);
+			startBatchPolling();
 		} catch {
 			// ignore
 		}
 		pollDeviceStatus({ quiet: true });
+		try {
+			$(wrapper).on("hide", () => stopBatchPolling());
+			$(wrapper).on("show", () => {
+				startBatchPolling();
+				pollDeviceStatus({ quiet: true });
+			});
+		} catch {
+			// ignore
+		}
+		try {
+			window.addEventListener("beforeunload", () => stopBatchPolling());
+		} catch {
+			// ignore
+		}
 	};
