@@ -388,7 +388,7 @@ def _insert_edge_event(
 	if not event_id:
 		return {"inserted": False, "duplicate": False}
 
-	if frappe.db.exists("RFID Edge Event", event_id):
+	if frappe.db.exists("RFID Edge Event", {"event_id": event_id}):
 		return {"inserted": False, "duplicate": True}
 
 	if device_id and batch_id and seq is not None:
@@ -1174,7 +1174,7 @@ def edge_batch_start(**kwargs) -> dict[str, Any]:
 
 	seq = _normalize_seq(body.get("seq"))
 
-	if frappe.db.exists("RFID Edge Event", event_id):
+	if frappe.db.exists("RFID Edge Event", {"event_id": event_id}):
 		state = _get_batch_state(device_id)
 		state.last_seen_at = frappe.utils.now_datetime()
 		state.save(ignore_permissions=True)
@@ -1242,7 +1242,7 @@ def edge_batch_stop(**kwargs) -> dict[str, Any]:
 
 	seq = _normalize_seq(body.get("seq"))
 
-	if frappe.db.exists("RFID Edge Event", event_id):
+	if frappe.db.exists("RFID Edge Event", {"event_id": event_id}):
 		return {"ok": True, "duplicate": True}
 
 	state = _get_batch_state(device_id)
@@ -1299,7 +1299,7 @@ def edge_product_switch(**kwargs) -> dict[str, Any]:
 
 	seq = _normalize_seq(body.get("seq"))
 
-	if frappe.db.exists("RFID Edge Event", event_id):
+	if frappe.db.exists("RFID Edge Event", {"event_id": event_id}):
 		return {"ok": True, "duplicate": True}
 
 	state = _get_batch_state(device_id)
@@ -1356,7 +1356,7 @@ def device_status(**kwargs) -> dict[str, Any]:
 	if pending_product:
 		_validate_item(pending_product)
 
-	if frappe.db.exists("RFID Edge Event", event_id):
+	if frappe.db.exists("RFID Edge Event", {"event_id": event_id}):
 		return {"ok": True, "duplicate": True}
 
 	state = _get_batch_state(device_id)
@@ -1427,7 +1427,7 @@ def edge_event_report(**kwargs) -> dict[str, Any]:
 	if not isinstance(payload, dict):
 		payload = {}
 
-	if frappe.db.exists("RFID Edge Event", event_id):
+	if frappe.db.exists("RFID Edge Event", {"event_id": event_id}):
 		state = _get_batch_state(device_id)
 		state.last_seen_at = frappe.utils.now_datetime()
 		state.save(ignore_permissions=True)
