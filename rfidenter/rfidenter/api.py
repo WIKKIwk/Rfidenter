@@ -313,6 +313,20 @@ def _payload_hash(payload_json: str) -> str:
 		return ""
 
 
+class RFIDConflictError(Exception):
+	def __init__(self, message: str, code: str) -> None:
+		super().__init__(message)
+		self.code = code
+
+
+def _conflict_response(code: str, message: str) -> dict[str, Any]:
+	try:
+		frappe.local.response["http_status_code"] = 409
+	except Exception:
+		pass
+	return {"ok": False, "error": message, "code": code}
+
+
 def _get_batch_state(device_id: str) -> frappe.model.document.Document:
 	name = frappe.db.get_value("RFID Batch State", {"device_id": device_id}, "name")
 	if name:
@@ -414,7 +428,7 @@ def _ensure_seq(
 	if allow_batch_reset and state.current_batch_id and batch_id and batch_id != state.current_batch_id:
 		last_seq = -1
 	if seq <= last_seq:
-		frappe.throw("Event seq regression.", frappe.ValidationError)
+		raise RFIDConflictError("Event seq regression.", "SEQ_REGRESSION")
 	return seq
 
 
@@ -1164,7 +1178,10 @@ def edge_batch_start(**kwargs) -> dict[str, Any]:
 		return {"ok": True, "duplicate": True}
 
 	state = _get_batch_state(device_id)
-	seq_val = _ensure_seq(state, seq, batch_id=batch_id, allow_batch_reset=True)
+	try:
+		seq_val = _ensure_seq(state, seq, batch_id=batch_id, allow_batch_reset=True)
+	except RFIDConflictError as exc:
+		return _conflict_response(exc.code, str(exc))
 
 	config = body.get("config") or body.get("config_json") or {}
 	if isinstance(config, str):
@@ -1227,9 +1244,12 @@ def edge_batch_stop(**kwargs) -> dict[str, Any]:
 
 	state = _get_batch_state(device_id)
 	if state.current_batch_id and batch_id != state.current_batch_id:
-		frappe.throw("Batch mismatch.", frappe.ValidationError)
+		return _conflict_response("BATCH_MISMATCH", "Batch mismatch.")
 
-	seq_val = _ensure_seq(state, seq, batch_id=batch_id, allow_batch_reset=False)
+	try:
+		seq_val = _ensure_seq(state, seq, batch_id=batch_id, allow_batch_reset=False)
+	except RFIDConflictError as exc:
+		return _conflict_response(exc.code, str(exc))
 
 	_insert_edge_event(
 		event_id=event_id,
@@ -1281,9 +1301,12 @@ def edge_product_switch(**kwargs) -> dict[str, Any]:
 
 	state = _get_batch_state(device_id)
 	if state.current_batch_id and batch_id != state.current_batch_id:
-		frappe.throw("Batch mismatch.", frappe.ValidationError)
+		return _conflict_response("BATCH_MISMATCH", "Batch mismatch.")
 
-	seq_val = _ensure_seq(state, seq, batch_id=batch_id, allow_batch_reset=False)
+	try:
+		seq_val = _ensure_seq(state, seq, batch_id=batch_id, allow_batch_reset=False)
+	except RFIDConflictError as exc:
+		return _conflict_response(exc.code, str(exc))
 
 	_insert_edge_event(
 		event_id=event_id,
@@ -1335,7 +1358,10 @@ def device_status(**kwargs) -> dict[str, Any]:
 
 	state = _get_batch_state(device_id)
 	if seq is not None:
-		seq_val = _ensure_seq(state, seq, batch_id=batch_id, allow_batch_reset=True)
+		try:
+			seq_val = _ensure_seq(state, seq, batch_id=batch_id, allow_batch_reset=True)
+		except RFIDConflictError as exc:
+			return _conflict_response(exc.code, str(exc))
 	else:
 		seq_val = None
 
@@ -1403,7 +1429,7 @@ def edge_event_report(**kwargs) -> dict[str, Any]:
 
 	state = _get_batch_state(device_id)
 	if state.current_batch_id and batch_id != state.current_batch_id:
-		frappe.throw("Batch mismatch.", frappe.ValidationError)
+		return _conflict_response("BATCH_MISMATCH", "Batch mismatch.")
 
 	product = str(
 		payload.get("product_id")
@@ -1413,9 +1439,12 @@ def edge_event_report(**kwargs) -> dict[str, Any]:
 		or ""
 	).strip()
 	if product and state.current_product and product != state.current_product:
-		frappe.throw("Product mismatch.", frappe.ValidationError)
+		return _conflict_response("PRODUCT_MISMATCH", "Product mismatch.")
 
-	seq_val = _ensure_seq(state, seq, batch_id=batch_id, allow_batch_reset=False)
+	try:
+		seq_val = _ensure_seq(state, seq, batch_id=batch_id, allow_batch_reset=False)
+	except RFIDConflictError as exc:
+		return _conflict_response(exc.code, str(exc))
 
 	payload_out = dict(payload)
 	payload_out["event_type"] = event_type
