@@ -1175,6 +1175,9 @@ def edge_batch_start(**kwargs) -> dict[str, Any]:
 	seq = _normalize_seq(body.get("seq"))
 
 	if frappe.db.exists("RFID Edge Event", event_id):
+		state = _get_batch_state(device_id)
+		state.last_seen_at = frappe.utils.now_datetime()
+		state.save(ignore_permissions=True)
 		return {"ok": True, "duplicate": True}
 
 	state = _get_batch_state(device_id)
