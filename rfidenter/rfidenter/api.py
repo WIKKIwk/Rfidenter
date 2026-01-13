@@ -554,6 +554,7 @@ def ingest_tags(**kwargs) -> dict[str, Any]:
 	event_id = _normalize_event_id(body.get("event_id"))
 	batch_id = _normalize_batch_id(body.get("batch_id"))
 	seq = _normalize_seq(body.get("seq"))
+	seq_val = seq
 
 	tags = body.get("tags") or []
 	if isinstance(tags, str):
@@ -569,16 +570,7 @@ def ingest_tags(**kwargs) -> dict[str, Any]:
 	tags = tags[:500]
 
 	if event_id:
-		payload = {"device": device, "batch_id": batch_id, "seq": seq, "ts": ts, "tags": tags}
-		event_result = _insert_edge_event(
-			event_id=event_id,
-			device_id=device,
-			batch_id=batch_id,
-			seq=seq,
-			event_type="ingest_tags",
-			payload=payload,
-		)
-		if event_result.get("duplicate"):
+		if frappe.db.exists("RFID Edge Event", {"event_id": event_id}):
 			return {
 				"ok": True,
 				"duplicate": True,
@@ -595,13 +587,27 @@ def ingest_tags(**kwargs) -> dict[str, Any]:
 				"zebra_processed": 0,
 			}
 
+		state = _get_batch_state_for_update(device)
+		if seq is not None:
+			try:
+				seq_val = _ensure_seq(state, seq, batch_id=batch_id, allow_batch_reset=True)
+			except RFIDConflictError as exc:
+				return _conflict_response(exc.code, str(exc))
+
+		payload = {"device": device, "batch_id": batch_id, "seq": seq_val, "ts": ts, "tags": tags}
+		_insert_edge_event(
+			event_id=event_id,
+			device_id=device,
+			batch_id=batch_id,
+			seq=seq_val,
+			event_type="ingest_tags",
+			payload=payload,
+		)
+
 		try:
-			state = _get_batch_state(device)
 			state.last_seen_at = frappe.utils.now_datetime()
-			if seq is not None:
-				last_seq = int(state.last_event_seq) if state.last_event_seq is not None else -1
-				if seq > last_seq:
-					state.last_event_seq = seq
+			if seq_val is not None:
+				state.last_event_seq = seq_val
 			state.save(ignore_permissions=True)
 		except Exception:
 			pass
@@ -681,11 +687,18 @@ def ingest_tags(**kwargs) -> dict[str, Any]:
 
 	# Zebra item-tags: auto-submit Stock Entry (best-effort).
 	zebra_processed = 0
-	try:
-		zebra_result = zebra_items.process_tag_reads(agg_tags, device=device, event_id=event_id or None)
-		zebra_processed = int(zebra_result.get("processed") or 0) if isinstance(zebra_result, dict) else 0
-	except Exception:
-		zebra_processed = 0
+	if event_id:
+		try:
+			zebra_result = zebra_items.process_tag_reads(
+				agg_tags,
+				device=device,
+				event_id=event_id,
+				batch_id=batch_id or None,
+				seq=seq_val,
+			)
+			zebra_processed = int(zebra_result.get("processed") or 0) if isinstance(zebra_result, dict) else 0
+		except Exception:
+			zebra_processed = 0
 
 	return {
 		"ok": True,
@@ -785,7 +798,7 @@ def upsert_antenna_rule(
 	if not has_rfidenter_access():
 		frappe.throw("RFIDenter: sizda RFIDer roli yo‘q.", frappe.PermissionError)
 
-	device_norm = str(device or "").strip() or "any"
+	device_norm = _sanitize_agent_id(str(device or "").strip()) or "any"
 	ant = _normalize_ant(antenna_id)
 	if ant <= 0:
 		frappe.throw("Antenna port noto‘g‘ri.", frappe.ValidationError)
@@ -794,7 +807,19 @@ def upsert_antenna_rule(
 	create_dn = bool(_normalize_bool(create_delivery_note)) if submit_stock else False
 	submit_dn = bool(_normalize_bool(submit_delivery_note))
 
-	name = frappe.db.get_value("RFID Antenna Rule", {"device": device_norm, "antenna_id": ant}, "name")
+	existing_rows = frappe.db.sql(
+		"""
+		SELECT name
+		FROM `tabRFID Antenna Rule`
+		WHERE LOWER(device) = LOWER(%s) AND antenna_id = %s
+		""",
+		(device_norm, ant),
+	)
+	name = ""
+	if existing_rows:
+		if len(existing_rows) > 1:
+			frappe.throw("Duplicate antenna rule rows.", frappe.ValidationError)
+		name = str(existing_rows[0][0] or "")
 	values = {
 		"device": device_norm,
 		"antenna_id": ant,

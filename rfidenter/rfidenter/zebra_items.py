@@ -539,6 +539,17 @@ def _create_stock_entry_draft_for_tag(
 	cf = _uom_conversion_factor(item_code, uom=uom_value, stock_uom=stock_uom)
 	transfer_qty = qty * cf
 
+	event_id = str(tag.get("event_id") or "").strip()
+	batch_id = str(tag.get("batch_id") or "").strip()
+	seq = tag.get("seq")
+	remarks = f"RFID Zebra: EPC={tag.get('epc')} ANT={ant_id} DEV={device}"
+	if event_id:
+		remarks += f" EVENT={event_id}"
+	if batch_id:
+		remarks += f" BATCH={batch_id}"
+	if seq is not None:
+		remarks += f" SEQ={seq}"
+
 	values = {
 		"doctype": "Stock Entry",
 		"stock_entry_type": "Material Issue",
@@ -558,8 +569,8 @@ def _create_stock_entry_draft_for_tag(
 				"s_warehouse": settings.warehouse,
 				"allow_zero_valuation_rate": 1,
 			}
-		],
-		"remarks": f"RFID Zebra: EPC={tag.get('epc')} ANT={ant_id} DEV={device}",
+			],
+		"remarks": remarks,
 	}
 	if series:
 		values["naming_series"] = series
@@ -636,6 +647,17 @@ def _create_delivery_note_draft_for_tag(
 	uom_value = uom or stock_uom
 	cf = _uom_conversion_factor(item_code, uom=uom_value, stock_uom=stock_uom)
 
+	event_id = str(tag.get("event_id") or "").strip()
+	batch_id = str(tag.get("batch_id") or "").strip()
+	seq = tag.get("seq")
+	remarks = f"RFID Zebra: EPC={tag.get('epc')} ANT={ant_id} DEV={device}"
+	if event_id:
+		remarks += f" EVENT={event_id}"
+	if batch_id:
+		remarks += f" BATCH={batch_id}"
+	if seq is not None:
+		remarks += f" SEQ={seq}"
+
 	values = {
 		"doctype": "Delivery Note",
 		"company": settings.company,
@@ -654,8 +676,8 @@ def _create_delivery_note_draft_for_tag(
 				"rate": default_rate,
 				"price_list_rate": default_rate,
 			}
-		],
-		"remarks": f"RFID Zebra: EPC={tag.get('epc')} ANT={ant_id} DEV={device}",
+			],
+		"remarks": remarks,
 	}
 	if getattr(settings, "selling_price_list", None):
 		values["selling_price_list"] = settings.selling_price_list
@@ -776,15 +798,30 @@ def _find_rule_for_ants(
 	return 0, None
 
 
-def process_tag_reads(tags: list[dict[str, Any]], *, device: str = "", event_id: str | None = None) -> dict[str, Any]:
+def process_tag_reads(
+	tags: list[dict[str, Any]],
+	*,
+	device: str = "",
+	event_id: str | None = None,
+	batch_id: str | None = None,
+	seq: int | None = None,
+) -> dict[str, Any]:
 	"""Process UHF reads: submit Stock Entry for known Zebra EPCs."""
 
 	if not tags:
+		return {"ok": True, "processed": 0}
+	if not event_id:
 		return {"ok": True, "processed": 0}
 
 	require_ant_match = _consume_requires_ant_match()
 	rules = _load_antenna_rules()
 	device_key = _normalize_device_key(device)
+	event_fields = {
+		"last_event_id": event_id,
+		"last_batch_id": batch_id,
+		"last_seq": seq,
+		"last_device_id": str(device or "")[:64],
+	}
 	device_rules = rules.get(device_key, {})
 	any_rules = rules.get("any", {})
 	has_stock_rules = any(bool(r.get("submit_stock_entry")) for r in device_rules.values()) or any(
@@ -818,11 +855,13 @@ def process_tag_reads(tags: list[dict[str, Any]], *, device: str = "", event_id:
 			"item_code",
 			"qty",
 			"uom",
-			"consume_ant_id",
-			"status",
-			"purchase_receipt",
-			"delivery_note",
-			"client_request_id",
+				"consume_ant_id",
+				"status",
+				"printed_at",
+				"scan_recon_required",
+				"purchase_receipt",
+				"delivery_note",
+				"client_request_id",
 		],
 		filters={"epc": ["in", epcs]},
 		limit=len(epcs),
@@ -846,7 +885,12 @@ def process_tag_reads(tags: list[dict[str, Any]], *, device: str = "", event_id:
 			if not isinstance(ants, set):
 				ants = set()
 
-			expected = _normalize_ant(row.get("consume_ant_id"))
+				expected = _normalize_ant(row.get("consume_ant_id"))
+				status = str(row.get("status") or "").strip()
+				printed_at = row.get("printed_at")
+				scan_recon_required = int(row.get("scan_recon_required") or 0)
+				if status != "Printed" or not printed_at or scan_recon_required:
+					continue
 
 			ant_for_stock, rule_stock = _find_rule_for_ants(ants, rules, device_key, "submit_stock_entry")
 			ant_for_delivery, rule_delivery = _find_rule_for_ants(ants, rules, device_key, "submit_delivery_note")
@@ -884,44 +928,49 @@ def process_tag_reads(tags: list[dict[str, Any]], *, device: str = "", event_id:
 							if _claim_for_processing(epc):
 								_submit_stock_entry(se_name, ant_id=stock_ant, device=str(device or "")[:64])
 								stock_entry_submitted = True
-					else:
-						# Claim first to avoid double receipts.
-						if _claim_for_processing(epc):
-							se_name = _create_stock_entry_draft_for_tag(
-								{
+						else:
+							# Claim first to avoid double receipts.
+							if _claim_for_processing(epc):
+								tag_payload = {
 									"epc": epc,
 									"item_code": row.get("item_code"),
 									"qty": row.get("qty"),
 									"uom": row.get("uom"),
-								},
-								ant_id=stock_ant,
-								device=str(device or "")[:64],
-								idempotency_key=idempotency_key,
-								key_type=key_type,
-							)
-							# Persist draft name even if submit fails, to prevent duplicates on retries.
-							frappe.db.set_value(
-								"RFID Zebra Tag",
-								epc,
-								{"purchase_receipt": se_name},
-								update_modified=True,
-							)
+									"event_id": event_id,
+									"batch_id": batch_id,
+									"seq": seq,
+								}
+								se_name = _create_stock_entry_draft_for_tag(
+									tag_payload,
+									ant_id=stock_ant,
+									device=str(device or "")[:64],
+									idempotency_key=idempotency_key,
+									key_type=key_type,
+								)
+								# Persist draft name even if submit fails, to prevent duplicates on retries.
+								frappe.db.set_value(
+									"RFID Zebra Tag",
+									epc,
+									{"purchase_receipt": se_name, **event_fields},
+									update_modified=True,
+								)
 							_submit_stock_entry(se_name, ant_id=stock_ant, device=str(device or "")[:64])
 							stock_entry_submitted = True
 
-					if stock_entry_submitted:
-						frappe.db.set_value(
-							"RFID Zebra Tag",
-							epc,
-							{
-								"status": "Consumed",
-								"purchase_receipt": se_name,
-								"consumed_at": frappe.utils.now_datetime(),
-								"consumed_device": str(device or "")[:64],
-								"last_error": "",
-							},
-							update_modified=True,
-						)
+						if stock_entry_submitted:
+							frappe.db.set_value(
+								"RFID Zebra Tag",
+								epc,
+								{
+									"status": "Consumed",
+									"purchase_receipt": se_name,
+									"consumed_at": frappe.utils.now_datetime(),
+									"consumed_device": str(device or "")[:64],
+									"last_error": "",
+									**event_fields,
+								},
+								update_modified=True,
+							)
 						processed += 1
 				except Exception as exc:
 					_set_error(epc, str(exc))
@@ -929,35 +978,45 @@ def process_tag_reads(tags: list[dict[str, Any]], *, device: str = "", event_id:
 			try:
 				delivery_note = str(row.get("delivery_note") or "").strip()
 				create_dn = bool(rule_stock and rule_stock.get("create_delivery_note"))
-				if stock_entry_submitted and create_dn and not delivery_note:
-					delivery_note = _create_delivery_note_draft_for_tag(
-						{"epc": epc, "item_code": row.get("item_code"), "qty": row.get("qty"), "uom": row.get("uom")},
-						ant_id=stock_ant or ant_for_stock or 0,
-						device=str(device or "")[:64],
-						idempotency_key=idempotency_key,
-						key_type=key_type,
-					)
-					frappe.db.set_value(
-						"RFID Zebra Tag",
-						epc,
-						{"delivery_note": delivery_note, "last_error": ""},
-						update_modified=True,
-					)
+					if stock_entry_submitted and create_dn and not delivery_note:
+						tag_payload = {
+							"epc": epc,
+							"item_code": row.get("item_code"),
+							"qty": row.get("qty"),
+							"uom": row.get("uom"),
+							"event_id": event_id,
+							"batch_id": batch_id,
+							"seq": seq,
+						}
+						delivery_note = _create_delivery_note_draft_for_tag(
+							tag_payload,
+							ant_id=stock_ant or ant_for_stock or 0,
+							device=str(device or "")[:64],
+							idempotency_key=idempotency_key,
+							key_type=key_type,
+						)
+						frappe.db.set_value(
+							"RFID Zebra Tag",
+							epc,
+							{"delivery_note": delivery_note, "last_error": "", **event_fields},
+							update_modified=True,
+						)
 
 				if ant_for_delivery and delivery_note:
 					dn_docstatus = frappe.db.get_value("Delivery Note", delivery_note, "docstatus") or 0
 					if int(dn_docstatus) == 0:
 						_submit_delivery_note(delivery_note, ant_id=ant_for_delivery, device=str(device or "")[:64])
-						frappe.db.set_value(
-							"RFID Zebra Tag",
-							epc,
-							{
-								"delivery_note_submitted_at": frappe.utils.now_datetime(),
-								"delivery_note_device": str(device or "")[:64],
-								"last_error": "",
-							},
-							update_modified=True,
-						)
+							frappe.db.set_value(
+								"RFID Zebra Tag",
+								epc,
+								{
+									"delivery_note_submitted_at": frappe.utils.now_datetime(),
+									"delivery_note_device": str(device or "")[:64],
+									"last_error": "",
+									**event_fields,
+								},
+								update_modified=True,
+							)
 			except Exception as exc:
 				_set_error(epc, str(exc))
 	except Exception:
