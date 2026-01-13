@@ -1814,7 +1814,13 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 			const currentProduct = String(data?.current_product || "").trim();
 			const pendingProduct = String(data?.pending_product || "").trim();
 
-			const statusLabel = pauseReason && status === "Paused" ? `${status} · ${pauseReason}` : status;
+			const pauseKey = pauseReason.replace(/[^a-zA-Z_]/g, "").toUpperCase();
+			const isPrinterPause = status === "Paused" && pauseKey.startsWith("PRINTER");
+			const resumeNote = isPrinterPause ? "Resume requires operator" : "";
+			const statusLabel =
+				pauseReason && status === "Paused"
+					? `${status} · ${pauseReason}${resumeNote ? ` · ${resumeNote}` : ""}`
+					: status;
 			const statusIndicator = status === "Running" ? "green" : status === "Paused" ? "orange" : "gray";
 			setPill($batchState, statusLabel, { indicator: statusIndicator });
 
