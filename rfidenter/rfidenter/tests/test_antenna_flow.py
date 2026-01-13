@@ -14,7 +14,14 @@ from rfidenter.rfidenter import zebra_items
 class TestAntennaFlow(FrappeTestCase, AccountsTestMixin):
 	def setUp(self) -> None:
 		frappe.set_user("Administrator")
-		self.create_company(company_name="_RFID Test Company", abbr="_RTC")
+		companies = frappe.db.get_all("Company", pluck="name", limit=1)
+		if not companies:
+			self.fail("No Company found for RFID antenna tests.")
+		self.company = companies[0]
+		warehouses = frappe.db.get_all("Warehouse", filters={"company": self.company}, pluck="name", limit=1)
+		if not warehouses:
+			self.fail("No Warehouse found for RFID antenna tests.")
+		self.warehouse = warehouses[0]
 		self.create_supplier(supplier_name="_RFID Test Supplier")
 		self.create_customer(customer_name="_RFID Test Customer")
 		self.device_id = "ant-device-test"
