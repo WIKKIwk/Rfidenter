@@ -1630,6 +1630,262 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 			state.status = { ok: connected, message: String(msg || "") };
 		}
 
+		function setPill($el, text, { indicator = "gray", title = "" } = {}) {
+			if (!$el || !$el.length) return;
+			const allowed = ["green", "red", "orange", "gray", "blue"];
+			$el.removeClass(allowed.join(" "));
+			$el.addClass(allowed.includes(indicator) ? indicator : "gray");
+			$el.text(String(text || ""));
+			if (title) $el.attr("title", String(title));
+			else $el.removeAttr("title");
+		}
+
+		function setBatchControlsEnabled(enabled) {
+			const disabled = !enabled;
+			$batchStart.prop("disabled", disabled);
+			$batchStop.prop("disabled", disabled);
+			$batchSwitch.prop("disabled", disabled);
+			$batchDevice.prop("disabled", disabled);
+			$batchId.prop("disabled", disabled);
+			batchControl.product?.$input?.prop("disabled", disabled);
+		}
+
+		function syncDeviceIdFromAgent() {
+			if (!$batchDevice.length) return;
+			const current = getDeviceId();
+			if (current) return;
+			const agent = currentAgent();
+			const next = String(agent?.device || agent?.agent_id || "").trim();
+			if (next) setDeviceId(next);
+		}
+
+		function normalizeQueueDepth(raw) {
+			if (raw === null || raw === undefined || raw === "") return null;
+			const n = Number(raw);
+			return Number.isFinite(n) ? n : null;
+		}
+
+		function setBatchQueue($el, raw) {
+			const n = normalizeQueueDepth(raw);
+			$el.text(Number.isFinite(n) ? String(n) : "N/A");
+		}
+
+		function nextBatchSeq() {
+			const last = Number(state.batch.lastEventSeq);
+			return Number.isFinite(last) ? last + 1 : 0;
+		}
+
+		function parseCallError(err) {
+			const response = err?.responseJSON || {};
+			const msg = response?.message || {};
+			const status = err?.status || response?.status || err?.xhr?.status || 0;
+			const code = msg?.code || "";
+			const errorText = msg?.error || msg?.message || err?.message || response?.exc || "";
+			const excType = response?.exc_type || "";
+			const serverMessages = response?._server_messages || "";
+			return { status, code, errorText, excType, serverMessages };
+		}
+
+		function isAuthError(info) {
+			if (!info) return false;
+			if (info.status === 401 || info.status === 403) return true;
+			if (info.excType === "PermissionError") return true;
+			const msg = `${info.errorText || ""} ${info.serverMessages || ""}`.toLowerCase();
+			return msg.includes("token") || msg.includes("rfider");
+		}
+
+		function showBatchConflict(info) {
+			const raw = String(info?.code || "").trim();
+			let code = raw;
+			if (!code) {
+				const msg = String(info?.errorText || "").toLowerCase();
+				if (msg.includes("batch mismatch")) code = "BATCH_MISMATCH";
+				else if (msg.includes("product mismatch")) code = "PRODUCT_MISMATCH";
+				else if (msg.includes("seq")) code = "SEQ_REGRESSION";
+			}
+			const label = code ? `Conflict: ${code}` : "Conflict";
+			setPill($batchStatus, label, { indicator: "orange", title: info?.errorText || "" });
+			frappe.msgprint({
+				title: "Conflict",
+				message: escapeHtml(info?.errorText || code || "Conflict"),
+				indicator: "orange",
+			});
+		}
+
+		function showBatchError(err) {
+			const info = parseCallError(err);
+			if (isAuthError(info)) {
+				state.batch.authBlocked = true;
+				setBatchControlsEnabled(false);
+				setPill($batchStatus, "Auth error", { indicator: "red", title: info?.errorText || "" });
+				frappe.msgprint({
+					title: "Auth error",
+					message: escapeHtml(info?.errorText || "Token/role xato."),
+					indicator: "red",
+				});
+				return;
+			}
+			if (info.status === 409) {
+				showBatchConflict(info);
+				return;
+			}
+			setPill($batchStatus, "Xato", { indicator: "orange", title: info?.errorText || "" });
+			if (info?.errorText) {
+				frappe.msgprint({ title: "Batch xatosi", message: escapeHtml(info.errorText), indicator: "red" });
+			}
+		}
+
+		function renderBatchState(data, meta) {
+			const status = String(data?.status || "Stopped").trim() || "Stopped";
+			const pauseReason = String(data?.pause_reason || "").trim();
+			const lastSeen = data?.last_seen_at || "";
+			const lastSeq = data?.last_event_seq;
+			const currentBatch = String(data?.current_batch_id || "").trim();
+			const currentProduct = String(data?.current_product || "").trim();
+			const pendingProduct = String(data?.pending_product || "").trim();
+
+			const statusLabel = pauseReason && status === "Paused" ? `${status} · ${pauseReason}` : status;
+			const statusIndicator = status === "Running" ? "green" : status === "Paused" ? "orange" : "gray";
+			setPill($batchState, statusLabel, { indicator: statusIndicator });
+
+			const lastSeenTs = parseServerTime(lastSeen);
+			const online = lastSeenTs && Date.now() - lastSeenTs <= 10000;
+			setPill($batchDeviceStatus, online ? "Online" : "Offline", { indicator: online ? "green" : "red" });
+			$batchLastSeen.text(fmtServerTime(lastSeen));
+			$batchLastSeq.text(Number.isFinite(Number(lastSeq)) ? String(lastSeq) : "--");
+			$batchCurrentBatch.text(currentBatch || "--");
+			$batchCurrentProduct.text(currentProduct || "--");
+			$batchPendingProduct.text(pendingProduct || "--");
+
+			if (currentBatch && !getBatchId()) setBatchId(currentBatch);
+			if (currentProduct && !getBatchProduct()) setBatchProduct(currentProduct);
+
+			state.batch.lastEventSeq = Number.isFinite(Number(lastSeq)) ? Number(lastSeq) : state.batch.lastEventSeq;
+
+			const printDepth = meta?.print_outbox_depth ?? data?.print_outbox_depth;
+			const erpDepth = meta?.erp_outbox_depth ?? data?.erp_outbox_depth;
+			const agentDepth = meta?.agent_queue_depth ?? data?.agent_queue_depth;
+			setBatchQueue($batchQueuePrint, printDepth);
+			setBatchQueue($batchQueueErp, erpDepth);
+			setBatchQueue($batchQueueAgent, agentDepth);
+		}
+
+		async function fetchBatchState(deviceId) {
+			try {
+				const r = await frappe.call("frappe.client.get_value", {
+					doctype: "RFID Batch State",
+					filters: { device_id: deviceId },
+					fieldname: [
+						"status",
+						"pause_reason",
+						"current_batch_id",
+						"current_product",
+						"pending_product",
+						"last_event_seq",
+						"last_seen_at",
+					],
+					as_dict: 1,
+				});
+				return r?.message || null;
+			} catch {
+				return null;
+			}
+		}
+
+		async function pollDeviceStatus({ quiet = false } = {}) {
+			if (state.batch.authBlocked) return;
+			const deviceId = getDeviceId();
+			if (!deviceId) {
+				setBatchControlsEnabled(false);
+				if (!quiet) setPill($batchStatus, "Device ID kerak", { indicator: "orange" });
+				return;
+			}
+			setBatchControlsEnabled(true);
+			try {
+				const payload = { event_id: newEventId(), device_id: deviceId };
+				const batchId = getBatchId();
+				if (batchId) payload.batch_id = batchId;
+				const r = await frappe.call("rfidenter.device_status", payload);
+				const msg = r?.message;
+				if (!msg || msg.ok !== true) throw new Error("Status olinmadi");
+				const stateData = msg.state || (await fetchBatchState(deviceId));
+				if (stateData) {
+					renderBatchState(stateData, msg);
+					setPill($batchStatus, "");
+				} else if (!quiet) {
+					setPill($batchStatus, "State topilmadi", { indicator: "orange" });
+				}
+			} catch (err) {
+				showBatchError(err);
+			}
+		}
+
+		async function callBatchEndpoint(method, payload) {
+			try {
+				const r = await frappe.call(method, payload);
+				const msg = r?.message;
+				if (!msg || msg.ok !== true) throw new Error(msg?.error || "Xato");
+				return msg;
+			} catch (err) {
+				showBatchError(err);
+				return null;
+			}
+		}
+
+		async function startBatch() {
+			const deviceId = getDeviceId();
+			const batchId = getBatchId();
+			const productId = getBatchProduct();
+			if (!deviceId) return setPill($batchStatus, "Device ID kerak", { indicator: "orange" });
+			if (!batchId) return setPill($batchStatus, "Batch ID kerak", { indicator: "orange" });
+			if (!productId) return setPill($batchStatus, "Product tanlang", { indicator: "orange" });
+			setPill($batchStatus, "Start...", { indicator: "gray" });
+			const payload = {
+				event_id: newEventId(),
+				device_id: deviceId,
+				batch_id: batchId,
+				seq: nextBatchSeq(),
+				product_id: productId,
+			};
+			const msg = await callBatchEndpoint("rfidenter.edge_batch_start", payload);
+			if (msg) pollDeviceStatus({ quiet: true });
+		}
+
+		async function stopBatch() {
+			const deviceId = getDeviceId();
+			const batchId = getBatchId();
+			if (!deviceId) return setPill($batchStatus, "Device ID kerak", { indicator: "orange" });
+			if (!batchId) return setPill($batchStatus, "Batch ID kerak", { indicator: "orange" });
+			setPill($batchStatus, "Stop...", { indicator: "gray" });
+			const payload = {
+				event_id: newEventId(),
+				device_id: deviceId,
+				batch_id: batchId,
+				seq: nextBatchSeq(),
+			};
+			const msg = await callBatchEndpoint("rfidenter.edge_batch_stop", payload);
+			if (msg) pollDeviceStatus({ quiet: true });
+		}
+
+		async function switchBatchProduct() {
+			const deviceId = getDeviceId();
+			const batchId = getBatchId();
+			const productId = getBatchProduct();
+			if (!deviceId) return setPill($batchStatus, "Device ID kerak", { indicator: "orange" });
+			if (!batchId) return setPill($batchStatus, "Batch ID kerak", { indicator: "orange" });
+			if (!productId) return setPill($batchStatus, "Product tanlang", { indicator: "orange" });
+			setPill($batchStatus, "Switch...", { indicator: "gray" });
+			const payload = {
+				event_id: newEventId(),
+				device_id: deviceId,
+				batch_id: batchId,
+				seq: nextBatchSeq(),
+				product_id: productId,
+			};
+			const msg = await callBatchEndpoint("rfidenter.edge_product_switch", payload);
+			if (msg) pollDeviceStatus({ quiet: true });
+		}
+
 		function updateConnectionUi() {
 			const mode = getConnMode();
 			$connMode.val(mode);
