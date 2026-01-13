@@ -687,15 +687,15 @@ class TestAntennaFlow(FrappeTestCase):
 		)
 
 		with patch("frappe.publish_realtime") as publish:
-				res = api.ingest_tags(
-					device=self.device_id,
-					event_id=event_id,
-					batch_id=self.batch_id,
-					seq=1,
-					ts=ts_epoch,
-					tags=[{"epcId": epc, "antId": 1, "count": 1}],
-				)
-				publish.assert_not_called()
+			res = api.ingest_tags(
+				device=self.device_id,
+				event_id=event_id,
+				batch_id=self.batch_id,
+				seq=1,
+				ts=ts_epoch,
+				tags=[{"epcId": epc, "antId": 1, "count": 1}],
+			)
+			publish.assert_not_called()
 
 		self.assertTrue(res.get("duplicate"))
 		edge_after = frappe.db.count("RFID Edge Event", {"device_id": self.device_id})
