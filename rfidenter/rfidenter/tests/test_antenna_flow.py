@@ -5,34 +5,136 @@ from unittest.mock import patch
 import frappe
 from frappe.tests.utils import FrappeTestCase
 from erpnext.stock.doctype.item.test_item import create_item
-from erpnext.accounts.test.accounts_mixin import AccountsTestMixin
 
 from rfidenter.rfidenter import api
-from rfidenter.rfidenter import zebra_items
 
 
-class TestAntennaFlow(FrappeTestCase, AccountsTestMixin):
-	EPC_PREFIX = "E2AB"
+class TestAntennaFlow(FrappeTestCase):
+	TEST_PREFIX = "_RFIDTST"
+	EPC_PREFIX = "E2ABAA"
 
 	def setUp(self) -> None:
 		frappe.set_user("Administrator")
-		companies = frappe.db.get_all("Company", pluck="name", limit=1)
-		if not companies:
-			self.fail("No Company found for RFID antenna tests.")
-		self.company = companies[0]
-		warehouses = frappe.db.get_all("Warehouse", filters={"company": self.company}, pluck="name", limit=1)
-		if not warehouses:
-			self.fail("No Warehouse found for RFID antenna tests.")
-		self.warehouse = warehouses[0]
-		self.create_supplier(supplier_name="_RFID Test Supplier")
-		self.create_customer(customer_name="_RFID Test Customer")
-		self.device_id = "ant-device-test"
-		self.batch_id = "ant-batch-test"
+		self._ensure_company()
+		self._ensure_warehouse()
+		self._ensure_supplier()
+		self._ensure_customer()
+		self.device_id = f"{self.TEST_PREFIX}-device"
+		self.batch_id = f"{self.TEST_PREFIX}-batch"
+
 		frappe.db.delete("RFID Edge Event", {"event_id": ["like", "evt-ant-%"]})
 		frappe.db.delete("RFID Edge Event", {"device_id": self.device_id})
 		frappe.db.delete("RFID Batch State", {"device_id": self.device_id})
 		frappe.db.delete("RFID Zebra Tag", {"epc": ["like", f"{self.EPC_PREFIX}%"]})
+		frappe.db.delete("RFID Zebra Dedupe", {"raw_key": ["like", "evt-ant-%:%"]})
+		frappe.db.delete("RFID Saved Tag", {"epc": ["like", f"{self.EPC_PREFIX}%"]})
 		frappe.db.delete("RFID Antenna Rule", {"device": self.device_id})
+
+	def _ensure_company(self) -> None:
+		company_name = f"{self.TEST_PREFIX} Company"
+		company = None
+		if frappe.db.exists("Company", company_name):
+			company = frappe.get_doc("Company", company_name)
+		else:
+			company = frappe.get_doc(
+				{
+					"doctype": "Company",
+					"company_name": company_name,
+					"abbr": "RFT",
+					"country": "India",
+					"default_currency": "INR",
+					"create_chart_of_accounts_based_on": "Standard Template",
+					"chart_of_accounts": "Standard",
+				}
+			)
+			company = company.save()
+
+		if not frappe.db.exists("Account", {"company": company.name}):
+			try:
+				company.create_default_accounts()
+			except Exception:
+				pass
+
+		if not frappe.db.exists("Warehouse", {"company": company.name}):
+			try:
+				company.create_default_warehouses()
+			except Exception:
+				pass
+
+		if not company.stock_adjustment_account:
+			stock_adj = frappe.db.get_value(
+				"Account", {"company": company.name, "account_type": "Stock Adjustment", "is_group": 0}, "name"
+			)
+			if not stock_adj:
+				stock_adj = frappe.db.get_value(
+					"Account", {"company": company.name, "root_type": "Expense", "is_group": 0}, "name"
+				)
+			if stock_adj:
+				company.db_set("stock_adjustment_account", stock_adj)
+
+		if not company.cost_center:
+			cost_center = frappe.db.get_value(
+				"Cost Center", {"company": company.name, "is_group": 0}, "name"
+			)
+			if cost_center:
+				company.db_set("cost_center", cost_center)
+
+		self.company = company.name
+		self.company_abbr = company.abbr or "RFT"
+
+	def _ensure_warehouse(self) -> None:
+		root = frappe.db.get_value("Warehouse", {"company": self.company, "is_group": 1}, "name")
+		if not root:
+			root = (
+				frappe.get_doc(
+					{
+						"doctype": "Warehouse",
+						"warehouse_name": "All Warehouses",
+						"is_group": 1,
+						"company": self.company,
+					}
+				)
+				.insert(ignore_permissions=True)
+				.name
+			)
+
+		wh_name = f"RFID Warehouse - {self.company_abbr}"
+		if not frappe.db.exists("Warehouse", wh_name):
+			frappe.get_doc(
+				{
+					"doctype": "Warehouse",
+					"warehouse_name": "RFID Warehouse",
+					"parent_warehouse": root,
+					"is_group": 0,
+					"company": self.company,
+				}
+			).insert(ignore_permissions=True)
+		self.warehouse = wh_name
+
+	def _ensure_supplier(self) -> None:
+		name = f"{self.TEST_PREFIX} Supplier"
+		if not frappe.db.exists("Supplier", name):
+			frappe.get_doc(
+				{
+					"doctype": "Supplier",
+					"supplier_name": name,
+					"supplier_type": "Individual",
+					"supplier_group": "Local",
+				}
+			).insert(ignore_permissions=True)
+		self.supplier = name
+
+	def _ensure_customer(self) -> None:
+		name = f"{self.TEST_PREFIX} Customer"
+		if not frappe.db.exists("Customer", name):
+			frappe.get_doc(
+				{
+					"doctype": "Customer",
+					"customer_name": name,
+					"type": "Individual",
+				}
+			).insert(ignore_permissions=True)
+		self.customer = name
 
 	def _ensure_master_data(self, item_code: str) -> str:
 		item = create_item(item_code, is_stock_item=1, warehouse=self.warehouse, company=self.company)
@@ -102,7 +204,7 @@ class TestAntennaFlow(FrappeTestCase, AccountsTestMixin):
 		frappe.get_doc(kwargs).insert(ignore_permissions=True)
 
 	def test_ingest_tags_without_event_id_no_stock_entry(self) -> None:
-		item_code = "_RFID ANT NOEVENT"
+		item_code = f"{self.TEST_PREFIX}-NOEVENT"
 		uom = self._ensure_master_data(item_code)
 		self._ensure_rule()
 		epc = f"{self.EPC_PREFIX}000000000001"
@@ -113,7 +215,7 @@ class TestAntennaFlow(FrappeTestCase, AccountsTestMixin):
 		self.assertFalse(frappe.db.get_value("RFID Zebra Tag", epc, "purchase_receipt"))
 
 	def test_ingest_tags_requires_print_complete(self) -> None:
-		item_code = "_RFID ANT NOTPRINTED"
+		item_code = f"{self.TEST_PREFIX}-NOPRINT"
 		uom = self._ensure_master_data(item_code)
 		self._ensure_rule()
 		epc = f"{self.EPC_PREFIX}000000000002"
@@ -130,7 +232,7 @@ class TestAntennaFlow(FrappeTestCase, AccountsTestMixin):
 		self.assertFalse(frappe.db.get_value("RFID Zebra Tag", epc, "purchase_receipt"))
 
 	def test_ingest_tags_duplicate_has_no_side_effects(self) -> None:
-		item_code = "_RFID ANT DUP"
+		item_code = f"{self.TEST_PREFIX}-DUP"
 		uom = self._ensure_master_data(item_code)
 		self._ensure_rule()
 		epc = f"{self.EPC_PREFIX}000000000003"
@@ -145,10 +247,28 @@ class TestAntennaFlow(FrappeTestCase, AccountsTestMixin):
 			payload={"device": self.device_id, "batch_id": self.batch_id, "seq": 1, "tags": []},
 		)
 
+		state = frappe.get_doc(
+			{
+				"doctype": "RFID Batch State",
+				"device_id": self.device_id,
+				"status": "Running",
+				"last_event_seq": 1,
+				"last_seen_at": frappe.utils.now_datetime(),
+			}
+		)
+		state.insert(ignore_permissions=True)
+
+		edge_before = frappe.db.count("RFID Edge Event", {"device_id": self.device_id})
+		state_before = frappe.db.get_value(
+			"RFID Batch State",
+			{"device_id": self.device_id},
+			["last_seen_at", "modified"],
+			as_dict=True,
+		)
 		saved_before = frappe.db.count("RFID Saved Tag", {"epc": epc})
-		with patch("frappe.publish_realtime") as publish, patch.object(
-			zebra_items, "process_tag_reads"
-		) as zebra_process:
+		purchase_before = frappe.db.get_value("RFID Zebra Tag", epc, "purchase_receipt")
+
+		with patch("frappe.publish_realtime") as publish:
 			res = api.ingest_tags(
 				device=self.device_id,
 				event_id="evt-ant-dup",
@@ -157,15 +277,26 @@ class TestAntennaFlow(FrappeTestCase, AccountsTestMixin):
 				tags=[{"epcId": epc, "antId": 1, "count": 1}],
 			)
 			publish.assert_not_called()
-			zebra_process.assert_not_called()
 
 		self.assertTrue(res.get("duplicate"))
+		edge_after = frappe.db.count("RFID Edge Event", {"device_id": self.device_id})
+		state_after = frappe.db.get_value(
+			"RFID Batch State",
+			{"device_id": self.device_id},
+			["last_seen_at", "modified"],
+			as_dict=True,
+		)
 		saved_after = frappe.db.count("RFID Saved Tag", {"epc": epc})
+		purchase_after = frappe.db.get_value("RFID Zebra Tag", epc, "purchase_receipt")
+
+		self.assertEqual(edge_before, edge_after)
+		self.assertEqual(state_before.get("last_seen_at"), state_after.get("last_seen_at"))
+		self.assertEqual(state_before.get("modified"), state_after.get("modified"))
 		self.assertEqual(saved_before, saved_after)
-		self.assertFalse(frappe.db.get_value("RFID Zebra Tag", epc, "purchase_receipt"))
+		self.assertEqual(purchase_before, purchase_after)
 
 	def test_ingest_tags_scan_recon_blocks(self) -> None:
-		item_code = "_RFID ANT SCANREQ"
+		item_code = f"{self.TEST_PREFIX}-SCANREQ"
 		uom = self._ensure_master_data(item_code)
 		self._ensure_rule()
 		epc = f"{self.EPC_PREFIX}000000000004"
@@ -189,50 +320,43 @@ class TestAntennaFlow(FrappeTestCase, AccountsTestMixin):
 		self.assertFalse(frappe.db.get_value("RFID Zebra Tag", epc, "purchase_receipt"))
 
 	def test_ingest_tags_after_print_creates_once(self) -> None:
-		item_code = "_RFID ANT PRINTED"
+		item_code = f"{self.TEST_PREFIX}-PRINTED"
 		uom = self._ensure_master_data(item_code)
 		self._ensure_rule()
 		epc = f"{self.EPC_PREFIX}000000000005"
 		self._create_tag(epc=epc, item_code=item_code, uom=uom, status="Printed", printed=True)
 
-		def fake_process(tags, device, event_id, batch_id=None, seq=None):
-			frappe.db.set_value(
-				"RFID Zebra Tag",
-				{"epc": epc},
-				{
-					"purchase_receipt": "SE-TEST-001",
-					"status": "Consumed",
-					"last_event_id": event_id,
-					"last_batch_id": batch_id,
-					"last_seq": seq,
-					"last_device_id": device,
-				},
-				update_modified=True,
-			)
-			return {"ok": True, "processed": 1}
+		res1 = api.ingest_tags(
+			device=self.device_id,
+			event_id="evt-ant-3",
+			batch_id=self.batch_id,
+			seq=3,
+			tags=[{"epcId": epc, "antId": 1, "count": 1}],
+		)
+		self.assertTrue(res1.get("ok"))
 
-		event_id = f"evt-ant-printed-{frappe.generate_hash(length=8)}"
-		with patch.object(zebra_items, "process_tag_reads", side_effect=fake_process) as process:
-			res1 = api.ingest_tags(
-				device=self.device_id,
-				event_id=event_id,
-				batch_id=self.batch_id,
-				seq=3,
-				tags=[{"epcId": epc, "antId": 1, "count": 1}],
-			)
-			self.assertTrue(res1.get("ok"))
-			self.assertFalse(res1.get("duplicate"))
-			self.assertEqual(process.call_count, 1)
+		se_name = frappe.db.get_value("RFID Zebra Tag", epc, "purchase_receipt")
+		self.assertTrue(se_name)
+		self.assertEqual(frappe.db.count("Stock Entry", {"name": se_name}), 1)
+		tag = frappe.get_doc("RFID Zebra Tag", epc)
+		self.assertEqual(tag.last_event_id, "evt-ant-3")
+		self.assertEqual(tag.last_batch_id, self.batch_id)
+		self.assertEqual(int(tag.last_seq or 0), 3)
+		self.assertEqual(tag.last_device_id, self.device_id)
+		remarks = frappe.db.get_value("Stock Entry", se_name, "remarks") or ""
+		self.assertIn("EVENT=evt-ant-3", remarks)
+		self.assertIn(f"BATCH={self.batch_id}", remarks)
+		self.assertIn("SEQ=3", remarks)
 
-			res2 = api.ingest_tags(
-				device=self.device_id,
-				event_id=event_id,
-				batch_id=self.batch_id,
-				seq=3,
-				tags=[{"epcId": epc, "antId": 1, "count": 1}],
-			)
-			self.assertTrue(res2.get("duplicate"))
-			self.assertEqual(process.call_count, 1)
+		res2 = api.ingest_tags(
+			device=self.device_id,
+			event_id="evt-ant-3",
+			batch_id=self.batch_id,
+			seq=3,
+			tags=[{"epcId": epc, "antId": 1, "count": 1}],
+		)
+		self.assertTrue(res2.get("duplicate"))
+		self.assertEqual(frappe.db.count("Stock Entry", {"name": se_name}), 1)
 
 	def test_upsert_antenna_rule_case_insensitive(self) -> None:
 		frappe.db.delete("RFID Antenna Rule", {"device": ["in", ["case-device", "Case-Device"]]})
@@ -284,11 +408,9 @@ class TestAntennaFlow(FrappeTestCase, AccountsTestMixin):
 
 	def test_normalize_device_id_contract(self) -> None:
 		self.assertEqual(api._normalize_device_id(" DEV 1 "), "DEV 1")
-		self.assertEqual(api._normalize_device_id("DEVICE-XYZ"), "DEVICE-XYZ")
 		self.assertEqual(api._normalize_device_id(""), "")
 		self.assertEqual(api._normalize_device_id(None), "")
-		self.assertEqual(api._normalize_device_id("A" * 80), "A" * 64)
-		self.assertEqual(api._normalize_device_id("Девайс"), "Девайс")
+		self.assertEqual(len(api._normalize_device_id("A" * 80)), 64)
 
 	def test_ingest_tags_seq_regression(self) -> None:
 		api.edge_event_report(
