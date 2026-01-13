@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-import secrets
 import datetime
+import re
+import secrets
 from unittest.mock import patch
 
 import frappe
-from frappe.tests.utils import FrappeTestCase
 from erpnext.stock.doctype.item.test_item import create_item
-from frappe.utils.data import convert_utc_to_system_timezone
+from frappe.tests.utils import FrappeTestCase
 
 from rfidenter.rfidenter import api
 
@@ -71,13 +71,35 @@ class TestAntennaFlow(FrappeTestCase):
 		meta = frappe.get_meta(doctype)
 		field = meta.get_field(fieldname)
 		raw = str(getattr(field, "options", "") or "")
-		placeholders = {"", "-", "---", "select", "none", "null"}
+
+		def _is_placeholder(option: str) -> bool:
+			opt = str(option or "").strip()
+			if not opt:
+				return True
+
+			lower = opt.lower()
+			if lower in {"none", "null"}:
+				return True
+
+			if re.fullmatch(r"-+", opt):
+				return True
+
+			compact = re.sub(r"[-_\s]+", "", lower)
+			if not compact:
+				return True
+
+			if compact.startswith("select"):
+				return True
+
+			if "select" in compact and ("option" in compact or "choose" in compact):
+				return True
+
+			return False
+
 		valid: list[str] = []
 		for option in raw.splitlines():
 			opt = option.strip()
-			if not opt:
-				continue
-			if opt.lower() in placeholders:
+			if _is_placeholder(opt):
 				continue
 			valid.append(opt)
 
@@ -196,17 +218,23 @@ class TestAntennaFlow(FrappeTestCase):
 			)
 			if existing:
 				return existing
+			doc = frappe.get_doc(
+				{
+					"doctype": "Account",
+					"account_name": account_name,
+					"is_group": 1,
+					"root_type": root_type,
+					"report_type": report_type,
+					"company": self.company,
+				}
+			)
 			try:
-				doc = frappe.get_doc(
-					{
-						"doctype": "Account",
-						"account_name": account_name,
-						"is_group": 1,
-						"root_type": root_type,
-						"report_type": report_type,
-						"company": self.company,
-					}
-				).insert(ignore_permissions=True)
+				doc.insert()
+			except (frappe.PermissionError, frappe.ValidationError):
+				try:
+					doc.insert(ignore_permissions=True)
+				except Exception as exc:
+					raise AssertionError(f"Minimal root account creation failed ({root_type}): {exc}") from exc
 			except Exception as exc:
 				raise AssertionError(f"Minimal root account creation failed ({root_type}): {exc}") from exc
 			return doc.name
@@ -653,10 +681,10 @@ class TestAntennaFlow(FrappeTestCase):
 		)
 		state.insert(ignore_permissions=True)
 
-		ts_epoch = 1730000000
-		day = convert_utc_to_system_timezone(
-			datetime.datetime.fromtimestamp(ts_epoch, tz=datetime.timezone.utc)
-		).date().isoformat()
+		now_local = frappe.utils.get_datetime(f"{frappe.utils.today()} 12:00:00")
+		ts_epoch = int(now_local.astimezone(datetime.timezone.utc).timestamp())
+		day = now_local.date().isoformat()
+
 		edge_before = frappe.db.count("RFID Edge Event", {"device_id": self.device_id})
 		state_before = frappe.db.get_value(
 			"RFID Batch State",
@@ -864,14 +892,15 @@ class TestAntennaFlow(FrappeTestCase):
 		cache_obj.delete_value(expected_key)
 		cache_obj.delete_value(sanitized_key)
 
-		set_keys: list[str] = []
-		CacheCls = type(cache_obj)
-		original_set_value = CacheCls.set_value
-
 		def _capture_set_value(self, key, value, *args, **kwargs):
 			assert original_set_value is not CacheCls.set_value, "Recursion guard: original_set_value was patched"
 			set_keys.append(key)
 			return original_set_value(self, key, value, *args, **kwargs)
+
+		set_keys: list[str] = []
+		CacheCls = type(cache_obj)
+		original_set_value = CacheCls.set_value
+		assert CacheCls.set_value is original_set_value, "Recursion guard: CacheCls.set_value already patched"
 
 		with patch.object(CacheCls, "set_value", new=_capture_set_value):
 			api.ingest_tags(device=device, tags=[{"epcId": epc, "antId": ant_id, "count": 1}])
