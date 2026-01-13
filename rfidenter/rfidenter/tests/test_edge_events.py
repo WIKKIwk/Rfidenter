@@ -55,6 +55,13 @@ class TestEdgeEvents(FrappeTestCase):
 
 		new_name = f"EDGE-{frappe.generate_hash(length=8)}"
 		frappe.rename_doc("RFID Edge Event", doc.name, new_name, force=True)
+		frappe.db.set_value(
+			"RFID Edge Event",
+			new_name,
+			"event_id",
+			event_id,
+			update_modified=False,
+		)
 
 		res = api.edge_event_report(
 			event_id=event_id,
