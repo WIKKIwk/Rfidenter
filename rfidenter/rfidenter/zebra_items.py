@@ -978,45 +978,45 @@ def process_tag_reads(
 			try:
 				delivery_note = str(row.get("delivery_note") or "").strip()
 				create_dn = bool(rule_stock and rule_stock.get("create_delivery_note"))
-					if stock_entry_submitted and create_dn and not delivery_note:
-						tag_payload = {
-							"epc": epc,
-							"item_code": row.get("item_code"),
-							"qty": row.get("qty"),
-							"uom": row.get("uom"),
-							"event_id": event_id,
-							"batch_id": batch_id,
-							"seq": seq,
-						}
-						delivery_note = _create_delivery_note_draft_for_tag(
-							tag_payload,
-							ant_id=stock_ant or ant_for_stock or 0,
-							device=str(device or "")[:64],
-							idempotency_key=idempotency_key,
-							key_type=key_type,
-						)
-						frappe.db.set_value(
-							"RFID Zebra Tag",
-							epc,
-							{"delivery_note": delivery_note, "last_error": "", **event_fields},
-							update_modified=True,
-						)
+				if stock_entry_submitted and create_dn and not delivery_note:
+					tag_payload = {
+						"epc": epc,
+						"item_code": row.get("item_code"),
+						"qty": row.get("qty"),
+						"uom": row.get("uom"),
+						"event_id": event_id,
+						"batch_id": batch_id,
+						"seq": seq,
+					}
+					delivery_note = _create_delivery_note_draft_for_tag(
+						tag_payload,
+						ant_id=stock_ant or ant_for_stock or 0,
+						device=str(device or "")[:64],
+						idempotency_key=idempotency_key,
+						key_type=key_type,
+					)
+					frappe.db.set_value(
+						"RFID Zebra Tag",
+						epc,
+						{"delivery_note": delivery_note, "last_error": "", **event_fields},
+						update_modified=True,
+					)
 
 				if ant_for_delivery and delivery_note:
 					dn_docstatus = frappe.db.get_value("Delivery Note", delivery_note, "docstatus") or 0
 					if int(dn_docstatus) == 0:
 						_submit_delivery_note(delivery_note, ant_id=ant_for_delivery, device=str(device or "")[:64])
-							frappe.db.set_value(
-								"RFID Zebra Tag",
-								epc,
-								{
-									"delivery_note_submitted_at": frappe.utils.now_datetime(),
-									"delivery_note_device": str(device or "")[:64],
-									"last_error": "",
-									**event_fields,
-								},
-								update_modified=True,
-							)
+						frappe.db.set_value(
+							"RFID Zebra Tag",
+							epc,
+							{
+								"delivery_note_submitted_at": frappe.utils.now_datetime(),
+								"delivery_note_device": str(device or "")[:64],
+								"last_error": "",
+								**event_fields,
+							},
+							update_modified=True,
+						)
 			except Exception as exc:
 				_set_error(epc, str(exc))
 	except Exception:
