@@ -28,6 +28,11 @@ def device_status(**kwargs):
 
 
 @frappe.whitelist()
+def get_device_snapshot(**kwargs):
+	return _api.get_device_snapshot(**kwargs)
+
+
+@frappe.whitelist()
 def edge_product_switch(**kwargs):
 	return _api.edge_product_switch(**kwargs)
 
