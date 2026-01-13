@@ -98,13 +98,10 @@ class TestAntennaFlow(FrappeTestCase):
 					"country": country,
 				}
 			)
-			frappe.local.flags.ignore_chart_of_accounts = True
 			try:
 				company.insert(ignore_permissions=True)
 			except Exception as exc:
 				raise AssertionError(f"Company creation failed: {exc}") from exc
-			finally:
-				frappe.local.flags.ignore_chart_of_accounts = False
 
 		self.company = company.name
 		self.company_abbr = company.abbr
@@ -116,27 +113,13 @@ class TestAntennaFlow(FrappeTestCase):
 		if stock_account and frappe.db.exists("Account", stock_account):
 			return
 
-		root_name = f"{self.TEST_PREFIX} Expenses"
 		root = frappe.db.get_value(
 			"Account",
-			{"company": self.company, "account_name": root_name, "is_group": 1},
+			{"company": self.company, "root_type": "Expense", "is_group": 1},
 			"name",
 		)
 		if not root:
-			try:
-				root_doc = frappe.get_doc(
-					{
-						"doctype": "Account",
-						"account_name": root_name,
-						"is_group": 1,
-						"root_type": "Expense",
-						"report_type": "Profit and Loss",
-						"company": self.company,
-					}
-				).insert(ignore_permissions=True)
-				root = root_doc.name
-			except Exception as exc:
-				raise AssertionError(f"Root expense account creation failed: {exc}") from exc
+			raise AssertionError("Expense root account missing for test company.")
 
 		stock_adj = frappe.db.get_value(
 			"Account",
@@ -168,25 +151,13 @@ class TestAntennaFlow(FrappeTestCase):
 		if cost_center and frappe.db.exists("Cost Center", cost_center):
 			return
 
-		root_name = f"{self.TEST_PREFIX} Root Cost Center"
 		root = frappe.db.get_value(
 			"Cost Center",
-			{"company": self.company, "cost_center_name": root_name, "is_group": 1},
+			{"company": self.company, "is_group": 1},
 			"name",
 		)
 		if not root:
-			try:
-				root_doc = frappe.get_doc(
-					{
-						"doctype": "Cost Center",
-						"cost_center_name": root_name,
-						"is_group": 1,
-						"company": self.company,
-					}
-				).insert(ignore_permissions=True)
-				root = root_doc.name
-			except Exception as exc:
-				raise AssertionError(f"Root cost center creation failed: {exc}") from exc
+			raise AssertionError("Root cost center missing for test company.")
 
 		leaf_name = f"{self.TEST_PREFIX} Main Cost Center"
 		leaf = frappe.db.get_value(
