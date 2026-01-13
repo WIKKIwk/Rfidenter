@@ -1430,6 +1430,46 @@ def device_status(**kwargs) -> dict[str, Any]:
 
 
 @frappe.whitelist()
+def get_device_snapshot(**kwargs) -> dict[str, Any]:
+	if not has_rfidenter_access():
+		frappe.throw("RFIDenter: sizda RFIDer roli yo‘q.", frappe.PermissionError)
+
+	body = _get_request_body(kwargs)
+	device_id = _normalize_device_id(body.get("device_id") or body.get("device") or body.get("agent_id"))
+	if not device_id:
+		frappe.throw("device_id kerak.", frappe.ValidationError)
+
+	name = frappe.db.get_value("RFID Batch State", {"device_id": device_id}, "name")
+	state: dict[str, Any] | None = None
+	if name:
+		doc = frappe.get_doc("RFID Batch State", name)
+		state = {
+			"device_id": doc.device_id,
+			"status": doc.status,
+			"pause_reason": doc.pause_reason,
+			"current_batch_id": doc.current_batch_id,
+			"current_product": doc.current_product,
+			"pending_product": doc.pending_product,
+			"last_event_seq": doc.last_event_seq,
+			"last_seen_at": doc.last_seen_at,
+		}
+
+	agent_id = _sanitize_agent_id(body.get("agent_id") or device_id)
+	agent_depth = (
+		frappe.db.count("RFID Agent Request", {"agent_id": agent_id, "status": ["in", ["Queued", "Sent"]]})
+		if agent_id
+		else None
+	)
+
+	return {
+		"ok": True,
+		"server_time": frappe.utils.now_datetime(),
+		"state": state,
+		"queue_depths": {"print": None, "erp": None, "agent": agent_depth},
+	}
+
+
+@frappe.whitelist()
 def edge_event_report(**kwargs) -> dict[str, Any]:
 	if not has_rfidenter_access():
 		frappe.throw("RFIDenter: sizda RFIDer roli yo‘q.", frappe.PermissionError)
