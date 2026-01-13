@@ -198,7 +198,7 @@ class TestAntennaFlow(FrappeTestCase, AccountsTestMixin):
 		def fake_process(tags, device, event_id, batch_id=None, seq=None):
 			frappe.db.set_value(
 				"RFID Zebra Tag",
-				epc,
+				{"epc": epc},
 				{
 					"purchase_receipt": "SE-TEST-001",
 					"status": "Consumed",
