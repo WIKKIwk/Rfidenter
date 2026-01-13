@@ -195,9 +195,16 @@ class TestAntennaFlow(FrappeTestCase, AccountsTestMixin):
 		epc = f"{self.EPC_PREFIX}000000000005"
 		self._create_tag(epc=epc, item_code=item_code, uom=uom, status="Printed", printed=True)
 
-		with patch.object(zebra_items, "_claim_for_processing", return_value=True) as claim, patch.object(
-			zebra_items, "_create_stock_entry_draft_for_tag", return_value="SE-TEST-001"
-		) as create_se, patch.object(zebra_items, "_submit_stock_entry"):
+		def fake_find_rule_for_ants(ants, rules, device_key, field):
+			if field == "submit_stock_entry":
+				return 1, {"submit_stock_entry": True}
+			return 0, None
+
+		with patch.object(zebra_items, "_find_rule_for_ants", side_effect=fake_find_rule_for_ants), patch.object(
+			zebra_items, "_claim_for_processing", return_value=True
+		) as claim, patch.object(zebra_items, "_create_stock_entry_draft_for_tag", return_value="SE-TEST-001") as create_se, patch.object(
+			zebra_items, "_submit_stock_entry"
+		):
 			res1 = api.ingest_tags(
 				device=self.device_id,
 				event_id="evt-ant-3",
