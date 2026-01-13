@@ -460,8 +460,21 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 						padding: 6px 10px;
 						white-space: nowrap;
 					}
+					.rfidenter-zebra .rfz-batch-grid {
+						display: flex;
+						flex-wrap: wrap;
+						gap: 12px 18px;
+					}
+					.rfidenter-zebra .rfz-batch-field {
+						min-width: 140px;
+					}
+					.rfidenter-zebra .rfz-batch-value {
+						font-weight: 600;
+					}
 					.rfidenter-zebra .rfz-queue:empty { display: none; }
 					.rfidenter-zebra .rfz-status:empty { display: none; }
+					.rfidenter-zebra .rfz-batch-status:empty,
+					.rfidenter-zebra .rfz-device-status:empty { display: none; }
 					.rfidenter-zebra .rfz-scale {
 						display: flex;
 						align-items: center;
