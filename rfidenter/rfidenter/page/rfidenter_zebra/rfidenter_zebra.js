@@ -1871,27 +1871,9 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 		return msg;
 	}
 
-	async function getNextBatchSeq(deviceId, batchId) {
-		try {
-			const msg = await fetchDeviceStatus(deviceId, batchId);
-			const stateData = msg.state || (await fetchBatchState(deviceId));
-			if (!stateData) {
-				setPill($batchStatus, "State topilmadi", { indicator: "orange" });
-				return null;
-			}
-			renderBatchState(stateData, msg);
-			const last = Number(stateData?.last_event_seq);
-			if (!Number.isFinite(last)) return 0;
-			return last + 1;
-		} catch (err) {
-			showBatchError(err);
-			return null;
-		}
-	}
-
-		async function pollDeviceStatus({ quiet = false } = {}) {
-			if (state.batch.authBlocked) return;
-			const deviceId = getDeviceId();
+	async function pollDeviceStatus({ quiet = false } = {}) {
+		if (state.batch.authBlocked) return;
+		const deviceId = getDeviceId();
 			if (!deviceId) {
 				setBatchControlsEnabled(false);
 				if (!quiet) setPill($batchStatus, "Device ID kerak", { indicator: "orange" });
@@ -1927,63 +1909,54 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 			}
 		}
 
-		async function startBatch() {
-			const deviceId = getDeviceId();
-			const batchId = getBatchId();
-			const productId = getBatchProduct();
-			if (!deviceId) return setPill($batchStatus, "Device ID kerak", { indicator: "orange" });
-			if (!batchId) return setPill($batchStatus, "Batch ID kerak", { indicator: "orange" });
-			if (!productId) return setPill($batchStatus, "Product tanlang", { indicator: "orange" });
-			setPill($batchStatus, "Start...", { indicator: "gray" });
-			const seq = await getNextBatchSeq(deviceId, batchId);
-			if (seq === null) return;
-			const payload = {
-				event_id: newEventId(),
-				device_id: deviceId,
-				batch_id: batchId,
-				seq,
-				product_id: productId,
-			};
-			const msg = await callBatchEndpoint("rfidenter.edge_batch_start", payload);
-			if (msg) pollDeviceStatus({ quiet: true });
-		}
+	async function startBatch() {
+		const deviceId = getDeviceId();
+		const batchId = getBatchId();
+		const productId = getBatchProduct();
+		if (!deviceId) return setPill($batchStatus, "Device ID kerak", { indicator: "orange" });
+		if (!batchId) return setPill($batchStatus, "Batch ID kerak", { indicator: "orange" });
+		if (!productId) return setPill($batchStatus, "Product tanlang", { indicator: "orange" });
+		setPill($batchStatus, "Start...", { indicator: "gray" });
+		const payload = {
+			event_id: newEventId(),
+			device_id: deviceId,
+			batch_id: batchId,
+			product_id: productId,
+		};
+		const msg = await callBatchEndpoint("rfidenter.edge_batch_start", payload);
+		if (msg) pollDeviceStatus({ quiet: true });
+	}
 
-		async function stopBatch() {
-			const deviceId = getDeviceId();
-			const batchId = getBatchId();
-			if (!deviceId) return setPill($batchStatus, "Device ID kerak", { indicator: "orange" });
-			if (!batchId) return setPill($batchStatus, "Batch ID kerak", { indicator: "orange" });
-			setPill($batchStatus, "Stop...", { indicator: "gray" });
-			const seq = await getNextBatchSeq(deviceId, batchId);
-			if (seq === null) return;
-			const payload = {
-				event_id: newEventId(),
-				device_id: deviceId,
-				batch_id: batchId,
-				seq,
-			};
-			const msg = await callBatchEndpoint("rfidenter.edge_batch_stop", payload);
-			if (msg) pollDeviceStatus({ quiet: true });
-		}
+	async function stopBatch() {
+		const deviceId = getDeviceId();
+		const batchId = getBatchId();
+		if (!deviceId) return setPill($batchStatus, "Device ID kerak", { indicator: "orange" });
+		if (!batchId) return setPill($batchStatus, "Batch ID kerak", { indicator: "orange" });
+		setPill($batchStatus, "Stop...", { indicator: "gray" });
+		const payload = {
+			event_id: newEventId(),
+			device_id: deviceId,
+			batch_id: batchId,
+		};
+		const msg = await callBatchEndpoint("rfidenter.edge_batch_stop", payload);
+		if (msg) pollDeviceStatus({ quiet: true });
+	}
 
-		async function switchBatchProduct() {
-			const deviceId = getDeviceId();
-			const batchId = getBatchId();
-			const productId = getBatchProduct();
-			if (!deviceId) return setPill($batchStatus, "Device ID kerak", { indicator: "orange" });
-			if (!batchId) return setPill($batchStatus, "Batch ID kerak", { indicator: "orange" });
-			if (!productId) return setPill($batchStatus, "Product tanlang", { indicator: "orange" });
-			setPill($batchStatus, "Switch...", { indicator: "gray" });
-			const seq = await getNextBatchSeq(deviceId, batchId);
-			if (seq === null) return;
-			const payload = {
-				event_id: newEventId(),
-				device_id: deviceId,
-				batch_id: batchId,
-				seq,
-				product_id: productId,
-			};
-			const msg = await callBatchEndpoint("rfidenter.edge_product_switch", payload);
+	async function switchBatchProduct() {
+		const deviceId = getDeviceId();
+		const batchId = getBatchId();
+		const productId = getBatchProduct();
+		if (!deviceId) return setPill($batchStatus, "Device ID kerak", { indicator: "orange" });
+		if (!batchId) return setPill($batchStatus, "Batch ID kerak", { indicator: "orange" });
+		if (!productId) return setPill($batchStatus, "Product tanlang", { indicator: "orange" });
+		setPill($batchStatus, "Switch...", { indicator: "gray" });
+		const payload = {
+			event_id: newEventId(),
+			device_id: deviceId,
+			batch_id: batchId,
+			product_id: productId,
+		};
+		const msg = await callBatchEndpoint("rfidenter.edge_product_switch", payload);
 			if (msg) pollDeviceStatus({ quiet: true });
 		}
 
