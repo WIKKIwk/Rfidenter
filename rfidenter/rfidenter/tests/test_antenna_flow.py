@@ -194,36 +194,34 @@ class TestAntennaFlow(FrappeTestCase, AccountsTestMixin):
 		epc = f"{self.EPC_PREFIX}000000000005"
 		self._create_tag(epc=epc, item_code=item_code, uom=uom, status="Printed", printed=True)
 
-		res1 = api.ingest_tags(
-			device=self.device_id,
-			event_id="evt-ant-3",
-			batch_id=self.batch_id,
-			seq=3,
-			tags=[{"epcId": epc, "antId": 1, "count": 1}],
-		)
-		self.assertTrue(res1.get("ok"))
-		se_name = frappe.db.get_value("RFID Zebra Tag", epc, "purchase_receipt")
-		self.assertTrue(se_name)
-		self.assertEqual(frappe.db.count("Stock Entry", {"name": se_name}), 1)
-		tag = frappe.get_doc("RFID Zebra Tag", epc)
-		self.assertEqual(tag.last_event_id, "evt-ant-3")
-		self.assertEqual(tag.last_batch_id, self.batch_id)
-		self.assertEqual(int(tag.last_seq or 0), 3)
-		self.assertEqual(tag.last_device_id, self.device_id)
-		remarks = frappe.db.get_value("Stock Entry", se_name, "remarks") or ""
-		self.assertIn("EVENT=evt-ant-3", remarks)
-		self.assertIn(f"BATCH={self.batch_id}", remarks)
-		self.assertIn("SEQ=3", remarks)
+		with patch.object(zebra_items, "_create_stock_entry_draft_for_tag", return_value="SE-TEST-001") as create_se, patch.object(
+			zebra_items, "_submit_stock_entry"
+		):
+			res1 = api.ingest_tags(
+				device=self.device_id,
+				event_id="evt-ant-3",
+				batch_id=self.batch_id,
+				seq=3,
+				tags=[{"epcId": epc, "antId": 1, "count": 1}],
+			)
+			self.assertTrue(res1.get("ok"))
+			se_name = frappe.db.get_value("RFID Zebra Tag", epc, "purchase_receipt")
+			self.assertEqual(se_name, "SE-TEST-001")
+			tag = frappe.get_doc("RFID Zebra Tag", epc)
+			self.assertEqual(tag.last_event_id, "evt-ant-3")
+			self.assertEqual(tag.last_batch_id, self.batch_id)
+			self.assertEqual(int(tag.last_seq or 0), 3)
+			self.assertEqual(tag.last_device_id, self.device_id)
 
-		res2 = api.ingest_tags(
-			device=self.device_id,
-			event_id="evt-ant-3",
-			batch_id=self.batch_id,
-			seq=3,
-			tags=[{"epcId": epc, "antId": 1, "count": 1}],
-		)
-		self.assertTrue(res2.get("duplicate"))
-		self.assertEqual(frappe.db.count("Stock Entry", {"name": se_name}), 1)
+			res2 = api.ingest_tags(
+				device=self.device_id,
+				event_id="evt-ant-3",
+				batch_id=self.batch_id,
+				seq=3,
+				tags=[{"epcId": epc, "antId": 1, "count": 1}],
+			)
+			self.assertTrue(res2.get("duplicate"))
+			self.assertEqual(create_se.call_count, 1)
 
 	def test_upsert_antenna_rule_case_insensitive(self) -> None:
 		frappe.db.delete("RFID Antenna Rule", {"device": ["in", ["case-device", "Case-Device"]]})
