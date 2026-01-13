@@ -69,10 +69,10 @@ def _claim_dedupe(
 	raw_key: str | None = None,
 	key_type: str | None = None,
 	epc: str | None = None,
-) -> frappe.model.document.Document | None:
+) -> tuple[frappe.model.document.Document | None, bool]:
 	dedupe_key = _make_dedupe_key(idempotency_key, kind)
 	if not dedupe_key:
-		return None
+		return None, False
 
 	doc = frappe.get_doc(
 		{
@@ -89,13 +89,13 @@ def _claim_dedupe(
 	)
 	try:
 		doc.insert(ignore_permissions=True)
-		return doc
+		return doc, True
 	except Exception as exc:
 		if isinstance(exc, frappe.DuplicateEntryError) or "Duplicate entry" in str(exc):
 			try:
-				return frappe.get_doc("RFID Zebra Dedupe", dedupe_key)
+				return frappe.get_doc("RFID Zebra Dedupe", dedupe_key), False
 			except Exception:
-				return None
+				return None, False
 		raise
 
 
@@ -476,7 +476,7 @@ def _create_stock_entry_draft_for_tag(
 				"epc": str(tag.get("epc") or ""),
 			}
 		)
-		claim = _claim_dedupe(
+		claim, created = _claim_dedupe(
 			idempotency_key,
 			kind="stock_entry",
 			payload_hash=payload_hash,
@@ -484,7 +484,7 @@ def _create_stock_entry_draft_for_tag(
 			key_type=key_type,
 			epc=str(tag.get("epc") or ""),
 		)
-		if claim:
+		if claim and not created:
 			doc_name = str(getattr(claim, "doc_name", "") or "")
 			doc_type = str(getattr(claim, "doc_type", "") or "")
 			status = str(getattr(claim, "status", "") or "")
@@ -568,7 +568,7 @@ def _create_delivery_note_draft_for_tag(
 				"epc": str(tag.get("epc") or ""),
 			}
 		)
-		claim = _claim_dedupe(
+		claim, created = _claim_dedupe(
 			idempotency_key,
 			kind="delivery_note",
 			payload_hash=payload_hash,
@@ -576,7 +576,7 @@ def _create_delivery_note_draft_for_tag(
 			key_type=key_type,
 			epc=str(tag.get("epc") or ""),
 		)
-		if claim:
+		if claim and not created:
 			doc_name = str(getattr(claim, "doc_name", "") or "")
 			doc_type = str(getattr(claim, "doc_type", "") or "")
 			status = str(getattr(claim, "status", "") or "")

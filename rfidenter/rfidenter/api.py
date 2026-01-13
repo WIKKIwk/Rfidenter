@@ -283,7 +283,18 @@ def _normalize_seq(raw: Any) -> int | None:
 
 
 def _get_request_body(kwargs: dict[str, Any] | None) -> dict[str, Any]:
-	body = _get_request_body(kwargs)
+	body = {}
+	try:
+		body = frappe.request.get_json(silent=True) or {}
+	except Exception:
+		body = {}
+
+	if not body:
+		try:
+			body = dict(frappe.local.form_dict or {})
+		except Exception:
+			body = {}
+		body.update(kwargs or {})
 
 	return body if isinstance(body, dict) else {}
 
@@ -1230,10 +1241,11 @@ def edge_batch_stop(**kwargs) -> dict[str, Any]:
 	)
 
 	state.status = "Stopped"
-	state.current_batch_id = batch_id
+	state.current_batch_id = None
+	state.current_product = None
+	state.pending_product = None
 	state.pause_reason = None
 	state.last_seen_at = frappe.utils.now_datetime()
-	state.last_event_seq = seq_val
 	state.save(ignore_permissions=True)
 
 	return {"ok": True, "event_id": event_id}
@@ -1347,8 +1359,6 @@ def device_status(**kwargs) -> dict[str, Any]:
 	if pause_reason is not None:
 		state.pause_reason = pause_reason or None
 	state.last_seen_at = frappe.utils.now_datetime()
-	if seq_val is not None:
-		state.last_event_seq = seq_val
 	state.save(ignore_permissions=True)
 
 	return {"ok": True, "event_id": event_id}

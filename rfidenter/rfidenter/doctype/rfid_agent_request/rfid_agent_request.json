@@ -71,7 +71,7 @@
   },
   {
    "fieldname": "request_ts",
-   "fieldtype": "Int",
+   "fieldtype": "Long Int",
    "label": "Request TS"
   },
   {

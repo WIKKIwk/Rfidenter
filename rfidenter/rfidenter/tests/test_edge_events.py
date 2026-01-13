@@ -2,14 +2,13 @@ from __future__ import annotations
 
 import frappe
 from frappe.tests.utils import FrappeTestCase
-from erpnext.accounts.test.accounts_mixin import AccountsTestMixin
 from erpnext.stock.doctype.item.test_item import create_item
 
 from rfidenter.rfidenter import api
 from rfidenter.rfidenter import zebra_items
 
 
-class TestEdgeEvents(FrappeTestCase, AccountsTestMixin):
+class TestEdgeEvents(FrappeTestCase):
 	def setUp(self) -> None:
 		frappe.set_user("Administrator")
 		self.device_id = "test-device"
@@ -105,12 +104,29 @@ class TestEdgeEvents(FrappeTestCase, AccountsTestMixin):
 		self.assertEqual(commands[0].get("request_id"), request_id)
 
 	def test_zebra_dedupe_claim_first(self) -> None:
-		self.create_company()
-		self.create_supplier()
-		self.create_customer()
+		company = frappe.db.get_value("Company", {}, "name")
+		warehouse = frappe.db.get_value("Warehouse", {"company": company}, "name") if company else None
+		if not company or not warehouse:
+			self.skipTest("Requires existing Company and Warehouse")
+
+		supplier = frappe.db.get_value("Supplier", {"supplier_name": "_RFID Test Supplier"}, "name")
+		if not supplier:
+			supplier = (
+				frappe.get_doc({"doctype": "Supplier", "supplier_name": "_RFID Test Supplier"})
+				.insert(ignore_permissions=True)
+				.name
+			)
+
+		customer = frappe.db.get_value("Customer", {"customer_name": "_RFID Test Customer"}, "name")
+		if not customer:
+			customer = (
+				frappe.get_doc({"doctype": "Customer", "customer_name": "_RFID Test Customer"})
+				.insert(ignore_permissions=True)
+				.name
+			)
 
 		item_code = "_RFID Dedupe Item"
-		item = create_item(item_code, is_stock_item=1, warehouse=self.warehouse, company=self.company)
+		item = create_item(item_code, is_stock_item=1, warehouse=warehouse, company=company)
 		uom = item.stock_uom
 
 		if not frappe.db.exists("RFID Zebra Item Receipt Setting", {"item_code": item_code}):
@@ -118,9 +134,9 @@ class TestEdgeEvents(FrappeTestCase, AccountsTestMixin):
 				{
 					"doctype": "RFID Zebra Item Receipt Setting",
 					"item_code": item_code,
-					"company": self.company,
-					"supplier": self.supplier,
-					"warehouse": self.warehouse,
+					"company": company,
+					"supplier": supplier,
+					"warehouse": warehouse,
 					"submit_purchase_receipt": 0,
 				}
 			).insert(ignore_permissions=True)
@@ -130,9 +146,9 @@ class TestEdgeEvents(FrappeTestCase, AccountsTestMixin):
 				{
 					"doctype": "RFID Delivery Note Setting",
 					"item_code": item_code,
-					"company": self.company,
-					"customer": self.customer,
-					"warehouse": self.warehouse,
+					"company": company,
+					"customer": customer,
+					"warehouse": warehouse,
 					"default_rate": 0,
 				}
 			).insert(ignore_permissions=True)
