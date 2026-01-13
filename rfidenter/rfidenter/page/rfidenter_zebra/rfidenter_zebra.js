@@ -76,6 +76,9 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 	const STORAGE_ZEBRA_URL = "rfidenter.zebra_url";
 	const STORAGE_CONN_MODE = "rfidenter.zebra.conn_mode"; // agent | local
 	const STORAGE_AGENT_ID = "rfidenter.zebra.agent_id";
+	const STORAGE_DEVICE_ID = "rfidenter.edge.device_id";
+	const STORAGE_BATCH_ID = "rfidenter.edge.batch_id";
+	const STORAGE_BATCH_PRODUCT = "rfidenter.edge.product_id";
 	const DEFAULT_ZEBRA_URL = "http://127.0.0.1:18000";
 
 	const state = {
@@ -89,6 +92,7 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 		devices: [],
 		result: null,
 		mode: "manual",
+		batch: { lastEventSeq: null, authBlocked: false, pollTimer: null },
 	};
 	let autoFallbackAllowed = true;
 	let autoFallbackTried = false;
