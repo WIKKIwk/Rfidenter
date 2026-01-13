@@ -137,7 +137,7 @@ def _update_antenna_stats(tags: list[dict[str, Any]], device: str, ts: int | Non
 	if not tags:
 		return
 
-	device_key = _sanitize_agent_id(device) or "unknown"
+	device_key = _normalize_device_id(device) or "unknown"
 	now_ms = int(ts) if ts else _now_ms()
 	ttl_sec = _antenna_ttl_sec()
 
@@ -595,7 +595,7 @@ def ingest_tags(**kwargs) -> dict[str, Any]:
 				return _conflict_response(exc.code, str(exc))
 
 		payload = {"device": device, "batch_id": batch_id, "seq": seq_val, "ts": ts, "tags": tags}
-		_insert_edge_event(
+		event_result = _insert_edge_event(
 			event_id=event_id,
 			device_id=device,
 			batch_id=batch_id,
@@ -603,6 +603,22 @@ def ingest_tags(**kwargs) -> dict[str, Any]:
 			event_type="ingest_tags",
 			payload=payload,
 		)
+		if event_result.get("duplicate") or event_result.get("duplicate_of") or event_result.get("duplicate-of"):
+			return {
+				"ok": True,
+				"duplicate": True,
+				"received": 0,
+				"unique": 0,
+				"aggregated": 0,
+				"seen_before": 0,
+				"skipped": 0,
+				"dedup_by_ant": _dedup_by_ant_enabled(),
+				"dedup_ttl_sec": _dedup_ttl_sec(),
+				"published": False,
+				"saved_updated": False,
+				"saved_count": 0,
+				"zebra_processed": 0,
+			}
 
 		try:
 			state.last_seen_at = frappe.utils.now_datetime()
@@ -614,7 +630,7 @@ def ingest_tags(**kwargs) -> dict[str, Any]:
 
 	dedup_enabled = _dedup_by_ant_enabled()
 	dedup_ttl = _dedup_ttl_sec()
-	dedup_device = _sanitize_agent_id(device) or device
+	dedup_device = _normalize_device_id(device) or device
 
 	# Aggregate within this request: same EPC+ANT -> single row with `count`.
 	# This keeps ERP UI counts close to the local UI while reducing realtime payload size.
@@ -798,7 +814,8 @@ def upsert_antenna_rule(
 	if not has_rfidenter_access():
 		frappe.throw("RFIDenter: sizda RFIDer roli yo‘q.", frappe.PermissionError)
 
-	device_norm = _sanitize_agent_id(str(device or "").strip()) or "any"
+	device_norm = _normalize_device_id(device)
+	device_norm = device_norm.lower() if device_norm else "any"
 	ant = _normalize_ant(antenna_id)
 	if ant <= 0:
 		frappe.throw("Antenna port noto‘g‘ri.", frappe.ValidationError)
@@ -890,7 +907,7 @@ def ingest_scale_weight(**kwargs) -> dict[str, Any]:
 		body.update(kwargs or {})
 
 	device = str(body.get("device") or body.get("devName") or "scale").strip() or "scale"
-	device_key = _sanitize_agent_id(device) or "scale"
+	device_key = _normalize_device_id(device) or "scale"
 
 	weight = _normalize_weight(body.get("weight") or body.get("value") or body.get("kg") or body.get("qty"))
 	if weight is None:
@@ -960,7 +977,7 @@ def get_scale_weight(device: str | None = None) -> dict[str, Any]:
 	if frappe.session.user and not has_rfidenter_access():
 		frappe.throw("RFIDenter: sizda RFIDer roli yo‘q.", frappe.PermissionError)
 
-	device_key = _sanitize_agent_id(device or "")
+	device_key = _normalize_device_id(device or "")
 	cache = frappe.cache()
 	reading = cache.get_value(f"{SCALE_CACHE_PREFIX}{device_key}") if device_key else None
 	if not reading:
