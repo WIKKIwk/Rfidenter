@@ -1922,6 +1922,7 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 		const next = agents.some((a) => String(a?.agent_id || "").trim() === selected) ? selected : String(agents[0]?.agent_id || "");
 		$connAgent.val(next);
 		setSelectedAgentId(next);
+		syncDeviceIdFromAgent();
 		$connAgentHint.text("");
 	}
 
