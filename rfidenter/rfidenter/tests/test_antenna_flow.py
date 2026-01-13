@@ -283,7 +283,7 @@ class TestAntennaFlow(FrappeTestCase):
 
 		res = api.ingest_tags(device=self.device_id, tags=[{"epcId": epc, "antId": 1, "count": 1}])
 		self.assertTrue(res.get("ok"))
-		self.assertFalse(frappe.db.get_value("RFID Zebra Tag", epc, "purchase_receipt"))
+		self.assertFalse(frappe.db.get_value("RFID Zebra Tag", {"epc": epc}, "purchase_receipt"))
 
 	def test_ingest_tags_requires_print_complete(self) -> None:
 		item_code = f"{self.TEST_PREFIX}-NOPRINT"
@@ -300,7 +300,7 @@ class TestAntennaFlow(FrappeTestCase):
 			tags=[{"epcId": epc, "antId": 1, "count": 1}],
 		)
 		self.assertTrue(res.get("ok"))
-		self.assertFalse(frappe.db.get_value("RFID Zebra Tag", epc, "purchase_receipt"))
+		self.assertFalse(frappe.db.get_value("RFID Zebra Tag", {"epc": epc}, "purchase_receipt"))
 
 	def test_ingest_tags_duplicate_has_no_side_effects(self) -> None:
 		item_code = f"{self.TEST_PREFIX}-DUP"
@@ -337,7 +337,7 @@ class TestAntennaFlow(FrappeTestCase):
 			as_dict=True,
 		)
 		saved_before = frappe.db.count("RFID Saved Tag", {"epc": epc})
-		purchase_before = frappe.db.get_value("RFID Zebra Tag", epc, "purchase_receipt")
+		purchase_before = frappe.db.get_value("RFID Zebra Tag", {"epc": epc}, "purchase_receipt")
 
 		with patch("frappe.publish_realtime") as publish:
 			res = api.ingest_tags(
@@ -358,7 +358,7 @@ class TestAntennaFlow(FrappeTestCase):
 			as_dict=True,
 		)
 		saved_after = frappe.db.count("RFID Saved Tag", {"epc": epc})
-		purchase_after = frappe.db.get_value("RFID Zebra Tag", epc, "purchase_receipt")
+		purchase_after = frappe.db.get_value("RFID Zebra Tag", {"epc": epc}, "purchase_receipt")
 
 		self.assertEqual(edge_before, edge_after)
 		self.assertEqual(state_before.get("last_seen_at"), state_after.get("last_seen_at"))
@@ -388,7 +388,7 @@ class TestAntennaFlow(FrappeTestCase):
 			tags=[{"epcId": epc, "antId": 1, "count": 1}],
 		)
 		self.assertTrue(res.get("ok"))
-		self.assertFalse(frappe.db.get_value("RFID Zebra Tag", epc, "purchase_receipt"))
+		self.assertFalse(frappe.db.get_value("RFID Zebra Tag", {"epc": epc}, "purchase_receipt"))
 
 	def test_ingest_tags_after_print_creates_once(self) -> None:
 		item_code = f"{self.TEST_PREFIX}-PRINTED"
@@ -406,11 +406,12 @@ class TestAntennaFlow(FrappeTestCase):
 		)
 		self.assertTrue(res1.get("ok"))
 
-		se_name = frappe.db.get_value("RFID Zebra Tag", epc, "purchase_receipt")
-		last_error = frappe.db.get_value("RFID Zebra Tag", epc, "last_error") or ""
+		se_name = frappe.db.get_value("RFID Zebra Tag", {"epc": epc}, "purchase_receipt")
+		last_error = frappe.db.get_value("RFID Zebra Tag", {"epc": epc}, "last_error") or ""
 		self.assertTrue(se_name, msg=last_error)
 		self.assertEqual(frappe.db.count("Stock Entry", {"name": se_name}), 1)
-		tag = frappe.get_doc("RFID Zebra Tag", epc)
+		tag_name = frappe.db.get_value("RFID Zebra Tag", {"epc": epc}, "name")
+		tag = frappe.get_doc("RFID Zebra Tag", tag_name)
 		self.assertEqual(tag.last_event_id, "evt-ant-3")
 		self.assertEqual(tag.last_batch_id, self.batch_id)
 		self.assertEqual(int(tag.last_seq or 0), 3)
