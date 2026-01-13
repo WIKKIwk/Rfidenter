@@ -336,6 +336,41 @@ def _get_batch_state(device_id: str) -> frappe.model.document.Document:
 	return doc
 
 
+def _get_batch_state_for_update(device_id: str) -> frappe.model.document.Document:
+	name = frappe.db.get_value(
+		"RFID Batch State",
+		{"device_id": device_id},
+		"name",
+		for_update=True,
+	)
+	if not name:
+		try:
+			doc = frappe.get_doc({"doctype": "RFID Batch State", "device_id": device_id, "status": "Stopped"})
+			doc.insert(ignore_permissions=True)
+			name = doc.name
+		except (frappe.DuplicateEntryError, frappe.UniqueValidationError):
+			name = frappe.db.get_value(
+				"RFID Batch State",
+				{"device_id": device_id},
+				"name",
+				for_update=True,
+			)
+	if not name:
+		frappe.throw("Batch state topilmadi.", frappe.ValidationError)
+	return frappe.get_doc("RFID Batch State", name)
+
+
+def _resolve_control_seq(
+	state: frappe.model.document.Document, seq: int | None, *, batch_id: str | None, allow_batch_reset: bool
+) -> int:
+	if seq is not None:
+		return _ensure_seq(state, seq, batch_id=batch_id, allow_batch_reset=allow_batch_reset)
+	last_seq = int(state.last_event_seq) if state.last_event_seq is not None else -1
+	if allow_batch_reset and state.current_batch_id and batch_id and batch_id != state.current_batch_id:
+		last_seq = -1
+	return last_seq + 1
+
+
 def _update_batch_state(
 	*,
 	device_id: str,
@@ -1180,9 +1215,9 @@ def edge_batch_start(**kwargs) -> dict[str, Any]:
 		state.save(ignore_permissions=True)
 		return {"ok": True, "duplicate": True}
 
-	state = _get_batch_state(device_id)
+	state = _get_batch_state_for_update(device_id)
 	try:
-		seq_val = _ensure_seq(state, seq, batch_id=batch_id, allow_batch_reset=True)
+		seq_val = _resolve_control_seq(state, seq, batch_id=batch_id, allow_batch_reset=True)
 	except RFIDConflictError as exc:
 		return _conflict_response(exc.code, str(exc))
 
@@ -1245,12 +1280,12 @@ def edge_batch_stop(**kwargs) -> dict[str, Any]:
 	if frappe.db.exists("RFID Edge Event", {"event_id": event_id}):
 		return {"ok": True, "duplicate": True}
 
-	state = _get_batch_state(device_id)
+	state = _get_batch_state_for_update(device_id)
 	if state.current_batch_id and batch_id != state.current_batch_id:
 		return _conflict_response("BATCH_MISMATCH", "Batch mismatch.")
 
 	try:
-		seq_val = _ensure_seq(state, seq, batch_id=batch_id, allow_batch_reset=False)
+		seq_val = _resolve_control_seq(state, seq, batch_id=batch_id, allow_batch_reset=False)
 	except RFIDConflictError as exc:
 		return _conflict_response(exc.code, str(exc))
 
@@ -1269,6 +1304,7 @@ def edge_batch_stop(**kwargs) -> dict[str, Any]:
 	state.pending_product = None
 	state.pause_reason = None
 	state.last_seen_at = frappe.utils.now_datetime()
+	state.last_event_seq = seq_val
 	state.save(ignore_permissions=True)
 
 	return {"ok": True, "event_id": event_id}
@@ -1302,12 +1338,12 @@ def edge_product_switch(**kwargs) -> dict[str, Any]:
 	if frappe.db.exists("RFID Edge Event", {"event_id": event_id}):
 		return {"ok": True, "duplicate": True}
 
-	state = _get_batch_state(device_id)
+	state = _get_batch_state_for_update(device_id)
 	if state.current_batch_id and batch_id != state.current_batch_id:
 		return _conflict_response("BATCH_MISMATCH", "Batch mismatch.")
 
 	try:
-		seq_val = _ensure_seq(state, seq, batch_id=batch_id, allow_batch_reset=False)
+		seq_val = _resolve_control_seq(state, seq, batch_id=batch_id, allow_batch_reset=False)
 	except RFIDConflictError as exc:
 		return _conflict_response(exc.code, str(exc))
 
