@@ -407,7 +407,8 @@ class TestAntennaFlow(FrappeTestCase):
 		self.assertTrue(res1.get("ok"))
 
 		se_name = frappe.db.get_value("RFID Zebra Tag", epc, "purchase_receipt")
-		self.assertTrue(se_name)
+		last_error = frappe.db.get_value("RFID Zebra Tag", epc, "last_error") or ""
+		self.assertTrue(se_name, msg=last_error)
 		self.assertEqual(frappe.db.count("Stock Entry", {"name": se_name}), 1)
 		tag = frappe.get_doc("RFID Zebra Tag", epc)
 		self.assertEqual(tag.last_event_id, "evt-ant-3")
