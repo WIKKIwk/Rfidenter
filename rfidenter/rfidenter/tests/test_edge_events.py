@@ -105,6 +105,7 @@ class TestEdgeEvents(FrappeTestCase):
 		state = frappe.get_doc("RFID Batch State", {"device_id": self.device_id})
 		self.assertEqual(state.status, "Running")
 		self.assertEqual(state.current_batch_id, self.batch_id)
+		first_seq = int(state.last_event_seq or 0)
 
 		api.edge_batch_stop(
 			event_id="evt-5",
@@ -113,7 +114,7 @@ class TestEdgeEvents(FrappeTestCase):
 		)
 		state.reload()
 		self.assertEqual(state.status, "Stopped")
-		self.assertEqual(int(state.last_event_seq or 0), 1)
+		self.assertEqual(int(state.last_event_seq or 0), first_seq + 1)
 
 	def test_batch_start_allocates_seq(self) -> None:
 		res1 = api.edge_batch_start(
@@ -122,6 +123,8 @@ class TestEdgeEvents(FrappeTestCase):
 			batch_id=self.batch_id,
 		)
 		self.assertTrue(res1.get("ok"))
+		state = frappe.get_doc("RFID Batch State", {"device_id": self.device_id})
+		first_seq = int(state.last_event_seq or 0)
 
 		res2 = api.edge_batch_start(
 			event_id="evt-7",
@@ -130,8 +133,8 @@ class TestEdgeEvents(FrappeTestCase):
 		)
 		self.assertTrue(res2.get("ok"))
 
-		state = frappe.get_doc("RFID Batch State", {"device_id": self.device_id})
-		self.assertEqual(int(state.last_event_seq or 0), 1)
+		state.reload()
+		self.assertEqual(int(state.last_event_seq or 0), first_seq + 1)
 
 	def test_batch_start_switch_without_seq(self) -> None:
 		company = frappe.db.get_value("Company", {}, "name")
