@@ -1416,6 +1416,28 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 			}
 		}
 
+		function ensureBatchControls() {
+			if (batchControl.product || !$batchProductWrap.length) return;
+			batchControl.product = frappe.ui.form.make_control({
+				df: {
+					label: "Product",
+					description: "",
+					fieldtype: "Link",
+					options: "Item",
+					placeholder: "Mahsulot tanlang",
+				},
+				parent: $batchProductWrap,
+				render_input: true,
+			});
+			batchControl.product.make_input();
+			batchControl.product.toggle_label(false);
+			const saved = getBatchProduct();
+			if (saved) batchControl.product.set_value(saved);
+			batchControl.product.$input?.on("change", () => {
+				setBatchProduct(batchControl.product.get_value());
+			});
+		}
+
 		async function ensureItemControls() {
 			if (itemState.controlsReady) return;
 			if (!$itemGroupWrap.length || !$itemWrap.length) return;
