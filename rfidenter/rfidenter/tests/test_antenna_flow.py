@@ -175,6 +175,15 @@ class TestAntennaFlow(FrappeTestCase):
 		se_name = frappe.db.get_value("RFID Zebra Tag", epc, "purchase_receipt")
 		self.assertTrue(se_name)
 		self.assertEqual(frappe.db.count("Stock Entry", {"name": se_name}), 1)
+		tag = frappe.get_doc("RFID Zebra Tag", epc)
+		self.assertEqual(tag.last_event_id, "evt-ant-3")
+		self.assertEqual(tag.last_batch_id, self.batch_id)
+		self.assertEqual(int(tag.last_seq or 0), 3)
+		self.assertEqual(tag.last_device_id, self.device_id)
+		remarks = frappe.db.get_value("Stock Entry", se_name, "remarks") or ""
+		self.assertIn("EVENT=evt-ant-3", remarks)
+		self.assertIn(f"BATCH={self.batch_id}", remarks)
+		self.assertIn("SEQ=3", remarks)
 
 		res2 = api.ingest_tags(
 			device=self.device_id,
