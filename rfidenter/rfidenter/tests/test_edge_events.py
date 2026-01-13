@@ -170,12 +170,25 @@ class TestEdgeEvents(FrappeTestCase):
 			batch_id=self.batch_id,
 		)
 		before = frappe.db.count("RFID Edge Event", {"device_id": self.device_id})
+		state_before = frappe.db.get_value(
+			"RFID Batch State",
+			{"device_id": self.device_id},
+			["last_seen_at", "modified"],
+			as_dict=True,
+		)
 
 		res = api.get_device_snapshot(device_id=self.device_id)
 		self.assertTrue(res.get("ok"))
 
 		after = frappe.db.count("RFID Edge Event", {"device_id": self.device_id})
 		self.assertEqual(before, after)
+		state_after = frappe.db.get_value(
+			"RFID Batch State",
+			{"device_id": self.device_id},
+			["last_seen_at", "modified"],
+			as_dict=True,
+		)
+		self.assertEqual(state_before, state_after)
 
 	def test_device_snapshot_fields(self) -> None:
 		device_id = self.agent_id
