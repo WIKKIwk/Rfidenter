@@ -1439,19 +1439,32 @@ def get_device_snapshot(**kwargs) -> dict[str, Any]:
 	if not device_id:
 		frappe.throw("device_id kerak.", frappe.ValidationError)
 
-	name = frappe.db.get_value("RFID Batch State", {"device_id": device_id}, "name")
 	state: dict[str, Any] | None = None
-	if name:
-		doc = frappe.get_doc("RFID Batch State", name)
+	row = frappe.db.get_value(
+		"RFID Batch State",
+		{"device_id": device_id},
+		[
+			"device_id",
+			"status",
+			"pause_reason",
+			"current_batch_id",
+			"current_product",
+			"pending_product",
+			"last_event_seq",
+			"last_seen_at",
+		],
+		as_dict=True,
+	)
+	if row:
 		state = {
-			"device_id": doc.device_id,
-			"status": doc.status,
-			"pause_reason": doc.pause_reason,
-			"current_batch_id": doc.current_batch_id,
-			"current_product": doc.current_product,
-			"pending_product": doc.pending_product,
-			"last_event_seq": doc.last_event_seq,
-			"last_seen_at": doc.last_seen_at,
+			"device_id": row.get("device_id"),
+			"status": row.get("status"),
+			"pause_reason": row.get("pause_reason"),
+			"current_batch_id": row.get("current_batch_id"),
+			"current_product": row.get("current_product"),
+			"pending_product": row.get("pending_product"),
+			"last_event_seq": row.get("last_event_seq"),
+			"last_seen_at": row.get("last_seen_at"),
 		}
 
 	agent_id = _sanitize_agent_id(body.get("agent_id") or device_id)
