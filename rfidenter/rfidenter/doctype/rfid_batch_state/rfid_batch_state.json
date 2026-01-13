@@ -1,0 +1,98 @@
+{
+ "actions": [],
+ "autoname": "field:device_id",
+ "creation": "2026-01-10 00:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "device_id",
+  "status",
+  "current_batch_id",
+  "current_product",
+  "pending_product",
+  "pause_reason",
+  "last_event_seq",
+  "last_seen_at",
+  "config_json"
+ ],
+ "fields": [
+  {
+   "fieldname": "device_id",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Device ID",
+   "reqd": 1,
+   "search_index": 1,
+   "unique": 1
+  },
+  {
+   "default": "Stopped",
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Status",
+   "options": "Running\nStopped\nPaused"
+  },
+  {
+   "fieldname": "current_batch_id",
+   "fieldtype": "Data",
+   "label": "Current Batch ID",
+   "search_index": 1
+  },
+  {
+   "fieldname": "current_product",
+   "fieldtype": "Link",
+   "label": "Current Product",
+   "options": "Item"
+  },
+  {
+   "fieldname": "pending_product",
+   "fieldtype": "Link",
+   "label": "Pending Product",
+   "options": "Item"
+  },
+  {
+   "fieldname": "pause_reason",
+   "fieldtype": "Small Text",
+   "label": "Pause Reason"
+  },
+  {
+   "fieldname": "last_event_seq",
+   "fieldtype": "Int",
+   "label": "Last Event Seq"
+  },
+  {
+   "fieldname": "last_seen_at",
+   "fieldtype": "Datetime",
+   "label": "Last Seen At"
+  },
+  {
+   "fieldname": "config_json",
+   "fieldtype": "Long Text",
+   "label": "Config JSON"
+  }
+ ],
+ "links": [],
+ "modified": "2026-01-10 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "RFIDenter",
+ "name": "RFID Batch State",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "RFIDer",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "track_changes": 1
+}

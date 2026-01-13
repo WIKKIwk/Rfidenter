@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import time
@@ -248,6 +249,172 @@ def _normalize_unit(raw: Any) -> str:
 	return mapper.get(s, s[:8])
 
 
+def _normalize_event_id(raw: Any) -> str:
+	s = str(raw or "").strip()
+	if not s:
+		return ""
+	return s[:80]
+
+
+def _normalize_device_id(raw: Any) -> str:
+	s = str(raw or "").strip()
+	if not s:
+		return ""
+	return s[:64]
+
+
+def _normalize_batch_id(raw: Any) -> str:
+	s = str(raw or "").strip()
+	if not s:
+		return ""
+	return s[:64]
+
+
+def _normalize_seq(raw: Any) -> int | None:
+	if raw is None or raw == "":
+		return None
+	try:
+		val = int(raw)
+	except Exception:
+		return None
+	if val < 0:
+		return None
+	return val
+
+
+def _get_request_body(kwargs: dict[str, Any] | None) -> dict[str, Any]:
+	body = _get_request_body(kwargs)
+
+	return body if isinstance(body, dict) else {}
+
+
+def _json_dump(payload: Any) -> str:
+	try:
+		return json.dumps(payload, separators=(",", ":"), sort_keys=True)
+	except Exception:
+		return "{}"
+
+
+def _payload_hash(payload_json: str) -> str:
+	try:
+		return hashlib.sha256(payload_json.encode("utf-8")).hexdigest()
+	except Exception:
+		return ""
+
+
+def _get_batch_state(device_id: str) -> frappe.model.document.Document:
+	name = frappe.db.get_value("RFID Batch State", {"device_id": device_id}, "name")
+	if name:
+		return frappe.get_doc("RFID Batch State", name)
+	doc = frappe.get_doc({"doctype": "RFID Batch State", "device_id": device_id, "status": "Stopped"})
+	doc.insert(ignore_permissions=True)
+	return doc
+
+
+def _update_batch_state(
+	*,
+	device_id: str,
+	batch_id: str | None,
+	seq: int | None,
+	status: str | None = None,
+	current_product: str | None = None,
+	pending_product: str | None = None,
+	pause_reason: str | None = None,
+	config_json: str | None = None,
+) -> None:
+	doc = _get_batch_state(device_id)
+
+	if status:
+		doc.status = status
+	if batch_id is not None and doc.current_batch_id and batch_id != doc.current_batch_id:
+		doc.last_event_seq = 0
+	if batch_id is not None:
+		doc.current_batch_id = batch_id
+	if current_product is not None:
+		doc.current_product = current_product or None
+	if pending_product is not None:
+		doc.pending_product = pending_product or None
+	if pause_reason is not None:
+		doc.pause_reason = pause_reason or None
+	if config_json is not None:
+		doc.config_json = config_json
+
+	now = frappe.utils.now_datetime()
+	doc.last_seen_at = now
+
+	if seq is not None:
+		last_seq = int(doc.last_event_seq) if doc.last_event_seq is not None else -1
+		if seq <= last_seq:
+			frappe.throw("Event seq regression.", frappe.ValidationError)
+		doc.last_event_seq = seq
+
+	doc.save(ignore_permissions=True)
+
+
+def _insert_edge_event(
+	*,
+	event_id: str,
+	device_id: str,
+	batch_id: str | None,
+	seq: int | None,
+	event_type: str,
+	payload: dict[str, Any],
+) -> dict[str, Any]:
+	if not event_id:
+		return {"inserted": False, "duplicate": False}
+
+	if frappe.db.exists("RFID Edge Event", event_id):
+		return {"inserted": False, "duplicate": True}
+
+	if device_id and batch_id and seq is not None:
+		existing = frappe.db.get_value(
+			"RFID Edge Event", {"device_id": device_id, "batch_id": batch_id, "seq": seq}, "event_id"
+		)
+		if existing:
+			frappe.throw("Event seq conflict.", frappe.ValidationError)
+
+	payload_json = _json_dump(payload)
+	payload_hash = _payload_hash(payload_json)
+
+	doc = frappe.get_doc(
+		{
+			"doctype": "RFID Edge Event",
+			"event_id": event_id,
+			"device_id": device_id,
+			"batch_id": batch_id,
+			"seq": seq,
+			"event_type": event_type,
+			"payload_json": payload_json,
+			"payload_hash": payload_hash,
+			"received_at": frappe.utils.now_datetime(),
+			"processed": 0,
+		}
+	)
+	doc.insert(ignore_permissions=True)
+	return {"inserted": True, "duplicate": False, "name": doc.name}
+
+
+def _ensure_seq(
+	state: frappe.model.document.Document, seq: int | None, *, batch_id: str | None, allow_batch_reset: bool
+) -> int:
+	if seq is None:
+		frappe.throw("Seq required.", frappe.ValidationError)
+	last_seq = int(state.last_event_seq) if state.last_event_seq is not None else -1
+	if allow_batch_reset and state.current_batch_id and batch_id and batch_id != state.current_batch_id:
+		last_seq = -1
+	if seq <= last_seq:
+		frappe.throw("Event seq regression.", frappe.ValidationError)
+	return seq
+
+
+def _validate_item(item_code: str | None) -> None:
+	item_code = str(item_code or "").strip()
+	if not item_code:
+		return
+	if not frappe.db.exists("Item", item_code):
+		frappe.throw("Item topilmadi.", frappe.ValidationError)
+
+
 def _normalize_bool(raw: Any) -> bool | None:
 	if raw is None or raw == "":
 		return None
@@ -320,22 +487,13 @@ def ingest_tags(**kwargs) -> dict[str, Any]:
 	if frappe.session.user and frappe.session.user != "Guest" and not has_rfidenter_access():
 		frappe.throw("RFIDenter: sizda RFIDer roli yo‘q.", frappe.PermissionError)
 
-	body = {}
-	try:
-		body = frappe.request.get_json(silent=True) or {}
-	except Exception:
-		body = {}
-
-	if not body:
-		# Fallback to form_dict / kwargs
-		try:
-			body = dict(frappe.local.form_dict or {})
-		except Exception:
-			body = {}
-		body.update(kwargs or {})
+	body = _get_request_body(kwargs)
 
 	device = str(body.get("device") or body.get("devName") or "unknown").strip() or "unknown"
 	ts = body.get("ts")
+	event_id = _normalize_event_id(body.get("event_id"))
+	batch_id = _normalize_batch_id(body.get("batch_id"))
+	seq = _normalize_seq(body.get("seq"))
 
 	tags = body.get("tags") or []
 	if isinstance(tags, str):
@@ -349,6 +507,44 @@ def ingest_tags(**kwargs) -> dict[str, Any]:
 
 	# Safety limits
 	tags = tags[:500]
+
+	if event_id:
+		payload = {"device": device, "batch_id": batch_id, "seq": seq, "ts": ts, "tags": tags}
+		event_result = _insert_edge_event(
+			event_id=event_id,
+			device_id=device,
+			batch_id=batch_id,
+			seq=seq,
+			event_type="ingest_tags",
+			payload=payload,
+		)
+		if event_result.get("duplicate"):
+			return {
+				"ok": True,
+				"duplicate": True,
+				"received": 0,
+				"unique": 0,
+				"aggregated": 0,
+				"seen_before": 0,
+				"skipped": 0,
+				"dedup_by_ant": _dedup_by_ant_enabled(),
+				"dedup_ttl_sec": _dedup_ttl_sec(),
+				"published": False,
+				"saved_updated": False,
+				"saved_count": 0,
+				"zebra_processed": 0,
+			}
+
+		try:
+			state = _get_batch_state(device)
+			state.last_seen_at = frappe.utils.now_datetime()
+			if seq is not None:
+				last_seq = int(state.last_event_seq) if state.last_event_seq is not None else -1
+				if seq > last_seq:
+					state.last_event_seq = seq
+			state.save(ignore_permissions=True)
+		except Exception:
+			pass
 
 	dedup_enabled = _dedup_by_ant_enabled()
 	dedup_ttl = _dedup_ttl_sec()
@@ -426,7 +622,7 @@ def ingest_tags(**kwargs) -> dict[str, Any]:
 	# Zebra item-tags: auto-submit Stock Entry (best-effort).
 	zebra_processed = 0
 	try:
-		zebra_result = zebra_items.process_tag_reads(agg_tags, device=device)
+		zebra_result = zebra_items.process_tag_reads(agg_tags, device=device, event_id=event_id or None)
 		zebra_processed = int(zebra_result.get("processed") or 0) if isinstance(zebra_result, dict) else 0
 	except Exception:
 		zebra_processed = 0
@@ -619,6 +815,10 @@ def ingest_scale_weight(**kwargs) -> dict[str, Any]:
 	stable = _normalize_bool(body.get("stable") or body.get("is_stable"))
 	port = str(body.get("port") or "").strip()
 
+	event_id = _normalize_event_id(body.get("event_id"))
+	batch_id = _normalize_batch_id(body.get("batch_id"))
+	seq = _normalize_seq(body.get("seq"))
+
 	ts_raw = body.get("ts")
 	ts = _now_ms()
 	try:
@@ -628,6 +828,32 @@ def ingest_scale_weight(**kwargs) -> dict[str, Any]:
 		ts = _now_ms()
 
 	payload = {"device": device, "weight": weight, "unit": unit, "stable": stable, "port": port, "ts": ts}
+
+	if event_id:
+		payload_event = dict(payload)
+		payload_event["batch_id"] = batch_id
+		payload_event["seq"] = seq
+		event_result = _insert_edge_event(
+			event_id=event_id,
+			device_id=device,
+			batch_id=batch_id,
+			seq=seq,
+			event_type="ingest_scale_weight",
+			payload=payload_event,
+		)
+		if event_result.get("duplicate"):
+			return {"ok": True, "duplicate": True, "device": device, "published": False}
+
+		try:
+			state = _get_batch_state(device)
+			state.last_seen_at = frappe.utils.now_datetime()
+			if seq is not None:
+				last_seq = int(state.last_event_seq) if state.last_event_seq is not None else -1
+				if seq > last_seq:
+					state.last_event_seq = seq
+			state.save(ignore_permissions=True)
+		except Exception:
+			pass
 
 	ttl = _scale_cache_ttl_sec()
 	cache = frappe.cache()
@@ -903,6 +1129,303 @@ def generate_user_token(rotate: Any | None = None) -> dict[str, Any]:
 	}
 
 
+@frappe.whitelist()
+def edge_batch_start(**kwargs) -> dict[str, Any]:
+	if not has_rfidenter_access():
+		frappe.throw("RFIDenter: sizda RFIDer roli yo‘q.", frappe.PermissionError)
+
+	body = _get_request_body(kwargs)
+	event_id = _normalize_event_id(body.get("event_id"))
+	if not event_id:
+		frappe.throw("event_id kerak.", frappe.ValidationError)
+
+	device_id = _normalize_device_id(body.get("device_id") or body.get("device") or body.get("agent_id"))
+	if not device_id:
+		frappe.throw("device_id kerak.", frappe.ValidationError)
+
+	batch_id = _normalize_batch_id(body.get("batch_id"))
+	if not batch_id:
+		frappe.throw("batch_id kerak.", frappe.ValidationError)
+
+	seq = _normalize_seq(body.get("seq"))
+
+	if frappe.db.exists("RFID Edge Event", event_id):
+		return {"ok": True, "duplicate": True}
+
+	state = _get_batch_state(device_id)
+	seq_val = _ensure_seq(state, seq, batch_id=batch_id, allow_batch_reset=True)
+
+	config = body.get("config") or body.get("config_json") or {}
+	if isinstance(config, str):
+		try:
+			config = json.loads(config)
+		except Exception:
+			config = {}
+	if not isinstance(config, dict):
+		config = {}
+
+	product = str(body.get("product_id") or body.get("item_code") or body.get("product") or "").strip() or None
+	if product:
+		_validate_item(product)
+
+	_insert_edge_event(
+		event_id=event_id,
+		device_id=device_id,
+		batch_id=batch_id,
+		seq=seq_val,
+		event_type="batch_start",
+		payload=body,
+	)
+
+	state.status = "Running"
+	state.current_batch_id = batch_id
+	if product is not None:
+		state.current_product = product or None
+		state.pending_product = None
+	state.pause_reason = None
+	state.config_json = _json_dump(config) if config else None
+	state.last_seen_at = frappe.utils.now_datetime()
+	state.last_event_seq = seq_val
+	state.save(ignore_permissions=True)
+
+	return {"ok": True, "event_id": event_id}
+
+
+@frappe.whitelist()
+def edge_batch_stop(**kwargs) -> dict[str, Any]:
+	if not has_rfidenter_access():
+		frappe.throw("RFIDenter: sizda RFIDer roli yo‘q.", frappe.PermissionError)
+
+	body = _get_request_body(kwargs)
+	event_id = _normalize_event_id(body.get("event_id"))
+	if not event_id:
+		frappe.throw("event_id kerak.", frappe.ValidationError)
+
+	device_id = _normalize_device_id(body.get("device_id") or body.get("device") or body.get("agent_id"))
+	if not device_id:
+		frappe.throw("device_id kerak.", frappe.ValidationError)
+
+	batch_id = _normalize_batch_id(body.get("batch_id"))
+	if not batch_id:
+		frappe.throw("batch_id kerak.", frappe.ValidationError)
+
+	seq = _normalize_seq(body.get("seq"))
+
+	if frappe.db.exists("RFID Edge Event", event_id):
+		return {"ok": True, "duplicate": True}
+
+	state = _get_batch_state(device_id)
+	if state.current_batch_id and batch_id != state.current_batch_id:
+		frappe.throw("Batch mismatch.", frappe.ValidationError)
+
+	seq_val = _ensure_seq(state, seq, batch_id=batch_id, allow_batch_reset=False)
+
+	_insert_edge_event(
+		event_id=event_id,
+		device_id=device_id,
+		batch_id=batch_id,
+		seq=seq_val,
+		event_type="batch_stop",
+		payload=body,
+	)
+
+	state.status = "Stopped"
+	state.current_batch_id = batch_id
+	state.pause_reason = None
+	state.last_seen_at = frappe.utils.now_datetime()
+	state.last_event_seq = seq_val
+	state.save(ignore_permissions=True)
+
+	return {"ok": True, "event_id": event_id}
+
+
+@frappe.whitelist()
+def edge_product_switch(**kwargs) -> dict[str, Any]:
+	if not has_rfidenter_access():
+		frappe.throw("RFIDenter: sizda RFIDer roli yo‘q.", frappe.PermissionError)
+
+	body = _get_request_body(kwargs)
+	event_id = _normalize_event_id(body.get("event_id"))
+	if not event_id:
+		frappe.throw("event_id kerak.", frappe.ValidationError)
+
+	device_id = _normalize_device_id(body.get("device_id") or body.get("device") or body.get("agent_id"))
+	if not device_id:
+		frappe.throw("device_id kerak.", frappe.ValidationError)
+
+	batch_id = _normalize_batch_id(body.get("batch_id"))
+	if not batch_id:
+		frappe.throw("batch_id kerak.", frappe.ValidationError)
+
+	product = str(body.get("product_id") or body.get("item_code") or body.get("product") or "").strip()
+	if not product:
+		frappe.throw("product_id kerak.", frappe.ValidationError)
+	_validate_item(product)
+
+	seq = _normalize_seq(body.get("seq"))
+
+	if frappe.db.exists("RFID Edge Event", event_id):
+		return {"ok": True, "duplicate": True}
+
+	state = _get_batch_state(device_id)
+	if state.current_batch_id and batch_id != state.current_batch_id:
+		frappe.throw("Batch mismatch.", frappe.ValidationError)
+
+	seq_val = _ensure_seq(state, seq, batch_id=batch_id, allow_batch_reset=False)
+
+	_insert_edge_event(
+		event_id=event_id,
+		device_id=device_id,
+		batch_id=batch_id,
+		seq=seq_val,
+		event_type="product_switch",
+		payload=body,
+	)
+
+	state.pending_product = product
+	state.last_seen_at = frappe.utils.now_datetime()
+	state.last_event_seq = seq_val
+	state.save(ignore_permissions=True)
+
+	return {"ok": True, "event_id": event_id}
+
+
+@frappe.whitelist()
+def device_status(**kwargs) -> dict[str, Any]:
+	if not has_rfidenter_access():
+		frappe.throw("RFIDenter: sizda RFIDer roli yo‘q.", frappe.PermissionError)
+
+	body = _get_request_body(kwargs)
+	event_id = _normalize_event_id(body.get("event_id"))
+	if not event_id:
+		frappe.throw("event_id kerak.", frappe.ValidationError)
+
+	device_id = _normalize_device_id(body.get("device_id") or body.get("device") or body.get("agent_id"))
+	if not device_id:
+		frappe.throw("device_id kerak.", frappe.ValidationError)
+
+	status = str(body.get("status") or "").strip()
+	if status and status not in ("Running", "Stopped", "Paused"):
+		frappe.throw("status noto‘g‘ri.", frappe.ValidationError)
+
+	batch_id = _normalize_batch_id(body.get("batch_id"))
+	seq = _normalize_seq(body.get("seq"))
+	pause_reason = str(body.get("pause_reason") or "").strip() or None
+	current_product = str(body.get("current_product") or "").strip() or None
+	pending_product = str(body.get("pending_product") or "").strip() or None
+	if current_product:
+		_validate_item(current_product)
+	if pending_product:
+		_validate_item(pending_product)
+
+	if frappe.db.exists("RFID Edge Event", event_id):
+		return {"ok": True, "duplicate": True}
+
+	state = _get_batch_state(device_id)
+	if seq is not None:
+		seq_val = _ensure_seq(state, seq, batch_id=batch_id, allow_batch_reset=True)
+	else:
+		seq_val = None
+
+	_insert_edge_event(
+		event_id=event_id,
+		device_id=device_id,
+		batch_id=batch_id,
+		seq=seq_val,
+		event_type="device_status",
+		payload=body,
+	)
+
+	if status:
+		state.status = status
+	if batch_id:
+		state.current_batch_id = batch_id
+	if current_product is not None:
+		state.current_product = current_product or None
+	if pending_product is not None:
+		state.pending_product = pending_product or None
+	if pause_reason is not None:
+		state.pause_reason = pause_reason or None
+	state.last_seen_at = frappe.utils.now_datetime()
+	if seq_val is not None:
+		state.last_event_seq = seq_val
+	state.save(ignore_permissions=True)
+
+	return {"ok": True, "event_id": event_id}
+
+
+@frappe.whitelist()
+def edge_event_report(**kwargs) -> dict[str, Any]:
+	if not has_rfidenter_access():
+		frappe.throw("RFIDenter: sizda RFIDer roli yo‘q.", frappe.PermissionError)
+
+	body = _get_request_body(kwargs)
+	event_id = _normalize_event_id(body.get("event_id"))
+	if not event_id:
+		frappe.throw("event_id kerak.", frappe.ValidationError)
+
+	device_id = _normalize_device_id(body.get("device_id") or body.get("device") or body.get("agent_id"))
+	if not device_id:
+		frappe.throw("device_id kerak.", frappe.ValidationError)
+
+	batch_id = _normalize_batch_id(body.get("batch_id"))
+	if not batch_id:
+		frappe.throw("batch_id kerak.", frappe.ValidationError)
+
+	seq = _normalize_seq(body.get("seq"))
+	event_type = str(body.get("event_type") or body.get("type") or "").strip()
+	if not event_type:
+		frappe.throw("event_type kerak.", frappe.ValidationError)
+
+	payload = body.get("payload")
+	if isinstance(payload, str):
+		try:
+			payload = json.loads(payload)
+		except Exception:
+			payload = {}
+	if payload is None:
+		payload = {}
+	if not isinstance(payload, dict):
+		payload = {}
+
+	if frappe.db.exists("RFID Edge Event", event_id):
+		return {"ok": True, "duplicate": True}
+
+	state = _get_batch_state(device_id)
+	if state.current_batch_id and batch_id != state.current_batch_id:
+		frappe.throw("Batch mismatch.", frappe.ValidationError)
+
+	product = str(
+		payload.get("product_id")
+		or payload.get("item_code")
+		or body.get("product_id")
+		or body.get("item_code")
+		or ""
+	).strip()
+	if product and state.current_product and product != state.current_product:
+		frappe.throw("Product mismatch.", frappe.ValidationError)
+
+	seq_val = _ensure_seq(state, seq, batch_id=batch_id, allow_batch_reset=False)
+
+	payload_out = dict(payload)
+	payload_out["event_type"] = event_type
+
+	_insert_edge_event(
+		event_id=event_id,
+		device_id=device_id,
+		batch_id=batch_id,
+		seq=seq_val,
+		event_type="event_report",
+		payload=payload_out,
+	)
+
+	state.last_seen_at = frappe.utils.now_datetime()
+	state.last_event_seq = seq_val
+	state.save(ignore_permissions=True)
+
+	return {"ok": True, "event_id": event_id}
+
+
 @frappe.whitelist(allow_guest=True)
 def register_agent(**kwargs) -> dict[str, Any]:
 	"""
@@ -1056,21 +1579,22 @@ def agent_enqueue(
 	ts = _now_ms()
 
 	request_id = frappe.generate_hash(length=20)
-	req = {
-		"request_id": request_id,
-		"agent_id": agent,
-		"cmd": command_str,
-		"args": args,
-		"requested_by": user,
-		"ts": ts,
-		"timeout_sec": timeout,
-	}
+	args_json = _json_dump(args)
 
-	queue_key = f"{AGENT_QUEUE_PREFIX}{agent}"
-	req_key = f"{AGENT_REQ_PREFIX}{request_id}"
-
-	frappe.cache().rpush(queue_key, json.dumps(req, separators=(",", ":")))
-	frappe.cache().set_value(req_key, req, expires_in_sec=_rpc_store_ttl_sec(timeout), shared=False)
+	doc = frappe.get_doc(
+		{
+			"doctype": "RFID Agent Request",
+			"request_id": request_id,
+			"agent_id": agent,
+			"command": command_str,
+			"args_json": args_json,
+			"requested_by": user,
+			"status": "Queued",
+			"timeout_sec": timeout,
+			"request_ts": ts,
+		}
+	)
+	doc.insert(ignore_permissions=True)
 
 	return {"ok": True, "request_id": request_id, "timeout_sec": timeout}
 
@@ -1102,21 +1626,50 @@ def agent_poll(agent_id: str = "", max_items: Any | None = None, **kwargs) -> di
 		limit = 5
 	limit = max(1, min(25, limit))
 
-	queue_key = f"{AGENT_QUEUE_PREFIX}{agent}"
-	commands: list[dict[str, Any]] = []
+	rows = frappe.get_all(
+		"RFID Agent Request",
+		fields=["request_id", "agent_id", "command", "args_json", "timeout_sec", "request_ts", "requested_by"],
+		filters={"agent_id": agent, "status": "Queued"},
+		order_by="creation asc",
+		limit=limit,
+	)
 
-	for _ in range(limit):
-		raw = frappe.cache().lpop(queue_key)
-		if not raw:
-			break
-		if isinstance(raw, (bytes, bytearray)):
-			raw = raw.decode("utf-8", errors="ignore")
-		try:
-			obj = json.loads(str(raw))
-		except Exception:
+	commands: list[dict[str, Any]] = []
+	for row in rows:
+		req_id = str(row.get("request_id") or "").strip()
+		if not req_id:
 			continue
-		if isinstance(obj, dict):
-			commands.append(obj)
+		frappe.db.sql(
+			"""
+			UPDATE `tabRFID Agent Request`
+			SET `status`='Sent', `sent_at`=NOW()
+			WHERE `name`=%s AND `status`='Queued'
+			""",
+			(req_id,),
+		)
+		try:
+			if not getattr(frappe.db, "_cursor", None) or frappe.db._cursor.rowcount <= 0:
+				continue
+		except Exception:
+			pass
+
+		args_json = row.get("args_json") or ""
+		try:
+			args_obj = json.loads(args_json) if args_json else {}
+		except Exception:
+			args_obj = {}
+
+		commands.append(
+			{
+				"request_id": req_id,
+				"agent_id": row.get("agent_id") or agent,
+				"cmd": row.get("command") or "",
+				"args": args_obj,
+				"requested_by": row.get("requested_by") or "",
+				"ts": int(row.get("request_ts") or 0),
+				"timeout_sec": int(row.get("timeout_sec") or 0),
+			}
+		)
 
 	return {"ok": True, "agent_id": agent, "commands": commands}
 
@@ -1149,9 +1702,8 @@ def agent_reply(
 	if not rid:
 		frappe.throw("request_id bo‘sh.", frappe.ValidationError)
 
-	req_key = f"{AGENT_REQ_PREFIX}{rid}"
-	meta = frappe.cache().get_value(req_key) or {}
-	timeout = _rpc_timeout_sec(meta.get("timeout_sec") if isinstance(meta, dict) else None)
+	doc = frappe.get_doc("RFID Agent Request", rid)
+	timeout = _rpc_timeout_sec(doc.timeout_sec)
 
 	is_ok = bool(ok) if ok is not None else error is None
 	reply = {
@@ -1163,12 +1715,16 @@ def agent_reply(
 		"ts": _now_ms(),
 	}
 
-	reply_key = f"{AGENT_REPLY_PREFIX}{rid}"
-	frappe.cache().set_value(reply_key, reply, expires_in_sec=_rpc_store_ttl_sec(timeout), shared=False)
+	doc.status = "Done" if is_ok else "Error"
+	doc.ok = 1 if is_ok else 0
+	doc.result_json = _json_dump(result) if is_ok else ""
+	doc.error = str(error or "") if not is_ok else ""
+	doc.replied_at = frappe.utils.now_datetime()
+	doc.save(ignore_permissions=True)
 
 	# Realtime notify requester (optional). This does not depend on DB commits.
 	try:
-		req_user = meta.get("requested_by") if isinstance(meta, dict) else None
+		req_user = doc.requested_by
 		if req_user:
 			frappe.publish_realtime("rfidenter_agent_reply", reply, user=req_user, after_commit=False)
 	except Exception:
@@ -1191,18 +1747,37 @@ def agent_result(request_id: str = "") -> dict[str, Any]:
 	if not rid:
 		frappe.throw("request_id bo‘sh.", frappe.ValidationError)
 
-	req_key = f"{AGENT_REQ_PREFIX}{rid}"
-	meta = frappe.cache().get_value(req_key)
-	if not meta or not isinstance(meta, dict):
+	if not frappe.db.exists("RFID Agent Request", rid):
 		return {"ok": True, "state": "expired"}
 
-	req_user = str(meta.get("requested_by") or "").strip()
+	doc = frappe.get_doc("RFID Agent Request", rid)
+	req_user = str(doc.requested_by or "").strip()
 	if req_user and req_user != user and not frappe.has_role("System Manager"):
 		frappe.throw("Siz bu request natijasini ko‘ra olmaysiz.", frappe.PermissionError)
 
-	reply_key = f"{AGENT_REPLY_PREFIX}{rid}"
-	reply = frappe.cache().get_value(reply_key)
-	if reply and isinstance(reply, dict):
+	timeout = int(doc.timeout_sec or 0)
+	if timeout > 0 and doc.request_ts:
+		if _now_ms() - int(doc.request_ts or 0) > timeout * 1000:
+			if doc.status not in ("Done", "Error", "Expired"):
+				doc.status = "Expired"
+				doc.save(ignore_permissions=True)
+			return {"ok": True, "state": "expired"}
+
+	if doc.status in ("Done", "Error"):
+		result_obj: Any = None
+		try:
+			result_obj = json.loads(doc.result_json) if doc.result_json else None
+		except Exception:
+			result_obj = None
+
+		reply = {
+			"request_id": rid,
+			"agent_id": doc.agent_id,
+			"ok": bool(doc.ok),
+			"result": result_obj if doc.ok else None,
+			"error": str(doc.error or "") if not doc.ok else "",
+			"ts": _now_ms(),
+		}
 		return {"ok": True, "state": "done", "reply": reply}
 
 	return {"ok": True, "state": "pending"}

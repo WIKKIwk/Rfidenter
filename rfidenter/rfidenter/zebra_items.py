@@ -33,6 +33,51 @@ def _normalize_qty(raw: Any) -> float:
 	return min(1_000_000.0, v)
 
 
+def _normalize_idempotency_key(raw: Any) -> str:
+	s = str(raw or "").strip()
+	if not s:
+		return ""
+	return s[:120]
+
+
+def _make_dedupe_key(raw_key: str, key_type: str, doc_type: str) -> str:
+	key = _normalize_idempotency_key(raw_key)
+	if not key:
+		return ""
+	return f"{doc_type}:{key_type}:{key}"[:180]
+
+
+def _get_dedupe_doc(idempotency_key: str) -> dict[str, Any] | None:
+	if not idempotency_key:
+		return None
+	row = frappe.db.get_value(
+		"RFID Zebra Dedupe", {"idempotency_key": idempotency_key}, ["doc_type", "doc_name"], as_dict=True
+	)
+	return row if isinstance(row, dict) else None
+
+
+def _insert_dedupe(
+	*, idempotency_key: str, raw_key: str, key_type: str, doc_type: str, doc_name: str, epc: str
+) -> None:
+	if not idempotency_key:
+		return
+	if frappe.db.exists("RFID Zebra Dedupe", {"idempotency_key": idempotency_key}):
+		return
+	doc = frappe.get_doc(
+		{
+			"doctype": "RFID Zebra Dedupe",
+			"idempotency_key": idempotency_key,
+			"raw_key": _normalize_idempotency_key(raw_key),
+			"key_type": str(key_type or "").strip() or None,
+			"doc_type": doc_type,
+			"doc_name": doc_name,
+			"epc": epc,
+			"created_at": frappe.utils.now_datetime(),
+		}
+	)
+	doc.insert(ignore_permissions=True)
+
+
 def _get_site_setting(key: str, default: Any = None) -> Any:
 	try:
 		site_conf = frappe.get_site_config(silent=True) or {}
@@ -204,7 +249,7 @@ def mark_tag_printed(*, epc: str) -> dict[str, Any]:
 		frappe.db.get_value(
 			"RFID Zebra Tag",
 			epc_norm,
-			["status", "purchase_receipt", "item_code", "qty", "uom", "consume_ant_id"],
+			["status", "purchase_receipt", "item_code", "qty", "uom", "consume_ant_id", "client_request_id"],
 			as_dict=True,
 		)
 		or {}
@@ -235,10 +280,16 @@ def mark_tag_printed(*, epc: str) -> dict[str, Any]:
 			prev_user = None
 
 		try:
+			client_request_id = str(row.get("client_request_id") or "").strip()
+			idempotency_key = client_request_id if client_request_id else None
+			key_type = "client_request_id" if client_request_id else None
+
 			se_name = _create_stock_entry_draft_for_tag(
 				{"epc": epc_norm, "item_code": row.get("item_code"), "qty": row.get("qty"), "uom": row.get("uom")},
 				ant_id=ant_id,
 				device="zebra-print",
+				idempotency_key=idempotency_key,
+				key_type=key_type,
 			)
 			frappe.db.set_value(
 				"RFID Zebra Tag",
@@ -371,12 +422,20 @@ def _uom_conversion_factor(item_code: str, *, uom: str, stock_uom: str) -> float
 	return min(1_000_000.0, v)
 
 
-def _create_stock_entry_draft_for_tag(tag: dict[str, Any], *, ant_id: int, device: str) -> str:
+def _create_stock_entry_draft_for_tag(
+	tag: dict[str, Any], *, ant_id: int, device: str, idempotency_key: str | None = None, key_type: str | None = None
+) -> str:
 	item_code = str(tag.get("item_code") or "").strip()
 	qty = float(tag.get("qty") or 0)
 	uom = str(tag.get("uom") or "").strip()
 	if not item_code or qty <= 0 or not uom:
 		raise ValueError("Tag meta noto‘g‘ri.")
+
+	if idempotency_key and key_type:
+		dedupe_key = _make_dedupe_key(idempotency_key, key_type, "Stock Entry")
+		existing = _get_dedupe_doc(dedupe_key)
+		if existing and existing.get("doc_name"):
+			return str(existing.get("doc_name"))
 
 	settings_name = frappe.db.get_value("RFID Zebra Item Receipt Setting", {"item_code": item_code}, "name")
 	if not settings_name:
@@ -422,15 +481,32 @@ def _create_stock_entry_draft_for_tag(tag: dict[str, Any], *, ant_id: int, devic
 	se_doc = frappe.get_doc(values)
 
 	se_doc.insert(ignore_permissions=True)
+	if idempotency_key and key_type:
+		_insert_dedupe(
+			idempotency_key=_make_dedupe_key(idempotency_key, key_type, "Stock Entry"),
+			raw_key=idempotency_key,
+			key_type=key_type,
+			doc_type="Stock Entry",
+			doc_name=se_doc.name,
+			epc=str(tag.get("epc") or ""),
+		)
 	return se_doc.name
 
 
-def _create_delivery_note_draft_for_tag(tag: dict[str, Any], *, ant_id: int, device: str) -> str:
+def _create_delivery_note_draft_for_tag(
+	tag: dict[str, Any], *, ant_id: int, device: str, idempotency_key: str | None = None, key_type: str | None = None
+) -> str:
 	item_code = str(tag.get("item_code") or "").strip()
 	qty = float(tag.get("qty") or 0)
 	uom = str(tag.get("uom") or "").strip()
 	if not item_code or qty <= 0 or not uom:
 		raise ValueError("Tag meta noto‘g‘ri.")
+
+	if idempotency_key and key_type:
+		dedupe_key = _make_dedupe_key(idempotency_key, key_type, "Delivery Note")
+		existing = _get_dedupe_doc(dedupe_key)
+		if existing and existing.get("doc_name"):
+			return str(existing.get("doc_name"))
 
 	settings_name = frappe.db.get_value("RFID Delivery Note Setting", {"item_code": item_code}, "name")
 	if not settings_name:
@@ -483,6 +559,15 @@ def _create_delivery_note_draft_for_tag(tag: dict[str, Any], *, ant_id: int, dev
 	except Exception:
 		pass
 	dn_doc.insert(ignore_permissions=True)
+	if idempotency_key and key_type:
+		_insert_dedupe(
+			idempotency_key=_make_dedupe_key(idempotency_key, key_type, "Delivery Note"),
+			raw_key=idempotency_key,
+			key_type=key_type,
+			doc_type="Delivery Note",
+			doc_name=dn_doc.name,
+			epc=str(tag.get("epc") or ""),
+		)
 	return dn_doc.name
 
 
@@ -588,7 +673,7 @@ def _find_rule_for_ants(
 	return 0, None
 
 
-def process_tag_reads(tags: list[dict[str, Any]], *, device: str = "") -> dict[str, Any]:
+def process_tag_reads(tags: list[dict[str, Any]], *, device: str = "", event_id: str | None = None) -> dict[str, Any]:
 	"""Process UHF reads: submit Stock Entry for known Zebra EPCs."""
 
 	if not tags:
@@ -634,6 +719,7 @@ def process_tag_reads(tags: list[dict[str, Any]], *, device: str = "") -> dict[s
 			"status",
 			"purchase_receipt",
 			"delivery_note",
+			"client_request_id",
 		],
 		filters={"epc": ["in", epcs]},
 		limit=len(epcs),
@@ -677,6 +763,12 @@ def process_tag_reads(tags: list[dict[str, Any]], *, device: str = "") -> dict[s
 
 			stock_entry_submitted = False
 			se_name = str(row.get("purchase_receipt") or "").strip()
+			client_request_id = str(row.get("client_request_id") or "").strip()
+			idempotency_key = client_request_id if client_request_id else None
+			key_type = "client_request_id" if client_request_id else None
+			if not idempotency_key and event_id:
+				idempotency_key = f"{event_id}:{epc}"
+				key_type = "event_id"
 
 			if stock_ant:
 				try:
@@ -701,6 +793,8 @@ def process_tag_reads(tags: list[dict[str, Any]], *, device: str = "") -> dict[s
 								},
 								ant_id=stock_ant,
 								device=str(device or "")[:64],
+								idempotency_key=idempotency_key,
+								key_type=key_type,
 							)
 							# Persist draft name even if submit fails, to prevent duplicates on retries.
 							frappe.db.set_value(
@@ -737,6 +831,8 @@ def process_tag_reads(tags: list[dict[str, Any]], *, device: str = "") -> dict[s
 						{"epc": epc, "item_code": row.get("item_code"), "qty": row.get("qty"), "uom": row.get("uom")},
 						ant_id=stock_ant or ant_for_stock or 0,
 						device=str(device or "")[:64],
+						idempotency_key=idempotency_key,
+						key_type=key_type,
 					)
 					frappe.db.set_value(
 						"RFID Zebra Tag",

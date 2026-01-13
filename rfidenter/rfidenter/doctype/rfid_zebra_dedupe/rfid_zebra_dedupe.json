@@ -1,0 +1,82 @@
+{
+ "actions": [],
+ "autoname": "field:idempotency_key",
+ "creation": "2026-01-10 00:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "idempotency_key",
+  "raw_key",
+  "key_type",
+  "doc_type",
+  "doc_name",
+  "epc",
+  "created_at"
+ ],
+ "fields": [
+  {
+   "fieldname": "idempotency_key",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Idempotency Key",
+   "reqd": 1,
+   "search_index": 1,
+   "unique": 1
+  },
+  {
+   "fieldname": "raw_key",
+   "fieldtype": "Data",
+   "label": "Raw Key",
+   "search_index": 1
+  },
+  {
+   "fieldname": "key_type",
+   "fieldtype": "Select",
+   "label": "Key Type",
+   "options": "client_request_id\nevent_id"
+  },
+  {
+   "fieldname": "doc_type",
+   "fieldtype": "Data",
+   "label": "Doc Type"
+  },
+  {
+   "fieldname": "doc_name",
+   "fieldtype": "Data",
+   "label": "Doc Name"
+  },
+  {
+   "fieldname": "epc",
+   "fieldtype": "Data",
+   "label": "EPC"
+  },
+  {
+   "fieldname": "created_at",
+   "fieldtype": "Datetime",
+   "label": "Created At"
+  }
+ ],
+ "links": [],
+ "modified": "2026-01-10 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "RFIDenter",
+ "name": "RFID Zebra Dedupe",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "RFIDer",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "track_changes": 1
+}
