@@ -26,6 +26,8 @@ class RFIDAntennaRule(Document):
 			(device_norm, ant),
 		)
 		if existing_rows:
+			if len(existing_rows) > 1:
+				frappe.throw("Duplicate antenna rule rows.", frappe.ValidationError)
 			existing = str(existing_rows[0][0] or "")
 			if existing and existing != self.name:
 				frappe.throw("Duplicate antenna rule rows.", frappe.ValidationError)
