@@ -28,6 +28,7 @@ class TestAntennaFlow(FrappeTestCase, AccountsTestMixin):
 		self.create_customer(customer_name="_RFID Test Customer")
 		self.device_id = "ant-device-test"
 		self.batch_id = "ant-batch-test"
+		frappe.db.delete("RFID Edge Event", {"event_id": ["like", "evt-ant-%"]})
 		frappe.db.delete("RFID Edge Event", {"device_id": self.device_id})
 		frappe.db.delete("RFID Batch State", {"device_id": self.device_id})
 		frappe.db.delete("RFID Zebra Tag", {"epc": ["like", f"{self.EPC_PREFIX}%"]})
