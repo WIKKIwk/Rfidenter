@@ -101,7 +101,6 @@ class TestEdgeEvents(FrappeTestCase):
 			event_id="evt-4",
 			device_id=self.device_id,
 			batch_id=self.batch_id,
-			seq=1,
 		)
 		state = frappe.get_doc("RFID Batch State", {"device_id": self.device_id})
 		self.assertEqual(state.status, "Running")
@@ -111,10 +110,55 @@ class TestEdgeEvents(FrappeTestCase):
 			event_id="evt-5",
 			device_id=self.device_id,
 			batch_id=self.batch_id,
-			seq=2,
 		)
 		state.reload()
 		self.assertEqual(state.status, "Stopped")
+		self.assertEqual(int(state.last_event_seq or 0), 1)
+
+	def test_batch_start_allocates_seq(self) -> None:
+		res1 = api.edge_batch_start(
+			event_id="evt-6",
+			device_id=self.device_id,
+			batch_id=self.batch_id,
+		)
+		self.assertTrue(res1.get("ok"))
+
+		res2 = api.edge_batch_start(
+			event_id="evt-7",
+			device_id=self.device_id,
+			batch_id=self.batch_id,
+		)
+		self.assertTrue(res2.get("ok"))
+
+		state = frappe.get_doc("RFID Batch State", {"device_id": self.device_id})
+		self.assertEqual(int(state.last_event_seq or 0), 1)
+
+	def test_batch_start_switch_without_seq(self) -> None:
+		company = frappe.db.get_value("Company", {}, "name")
+		warehouse = frappe.db.get_value("Warehouse", {"company": company}, "name") if company else None
+		if not company or not warehouse:
+			self.skipTest("Requires existing Company and Warehouse")
+
+		item_code = "_RFID Batch Switch"
+		create_item(item_code, is_stock_item=1, warehouse=warehouse, company=company)
+
+		res1 = api.edge_batch_start(
+			event_id="evt-8",
+			device_id=self.device_id,
+			batch_id=self.batch_id,
+		)
+		self.assertTrue(res1.get("ok"))
+
+		res2 = api.edge_product_switch(
+			event_id="evt-9",
+			device_id=self.device_id,
+			batch_id=self.batch_id,
+			product_id=item_code,
+		)
+		self.assertTrue(res2.get("ok"))
+
+		state = frappe.get_doc("RFID Batch State", {"device_id": self.device_id})
+		self.assertEqual(state.pending_product, item_code)
 
 	def test_agent_queue_persists(self) -> None:
 		res = api.agent_enqueue(agent_id=self.agent_id, command="ping", args={"a": 1}, timeout_sec=5)
