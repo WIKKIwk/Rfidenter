@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from unittest.mock import patch
+
 import frappe
 from frappe.tests.utils import FrappeTestCase
 from erpnext.stock.doctype.item.test_item import create_item
@@ -133,6 +135,38 @@ class TestAntennaFlow(FrappeTestCase):
 		self.assertTrue(res.get("ok"))
 		self.assertFalse(frappe.db.get_value("RFID Zebra Tag", epc, "purchase_receipt"))
 
+	def test_ingest_tags_duplicate_has_no_side_effects(self) -> None:
+		item_code = "_RFID ANT DUP"
+		uom = self._ensure_master_data(item_code)
+		self._ensure_rule()
+		epc = "EPC-ANT-DUP"
+		self._create_tag(epc=epc, item_code=item_code, uom=uom, status="Printed", printed=True)
+
+		api._insert_edge_event(
+			event_id="evt-ant-dup",
+			device_id=self.device_id,
+			batch_id=self.batch_id,
+			seq=1,
+			event_type="ingest_tags",
+			payload={"device": self.device_id, "batch_id": self.batch_id, "seq": 1, "tags": []},
+		)
+
+		saved_before = frappe.db.count("RFID Saved Tag", {"epc": epc})
+		with patch("frappe.publish_realtime") as publish:
+			res = api.ingest_tags(
+				device=self.device_id,
+				event_id="evt-ant-dup",
+				batch_id=self.batch_id,
+				seq=1,
+				tags=[{"epcId": epc, "antId": 1, "count": 1}],
+			)
+			publish.assert_not_called()
+
+		self.assertTrue(res.get("duplicate"))
+		saved_after = frappe.db.count("RFID Saved Tag", {"epc": epc})
+		self.assertEqual(saved_before, saved_after)
+		self.assertFalse(frappe.db.get_value("RFID Zebra Tag", epc, "purchase_receipt"))
+
 	def test_ingest_tags_scan_recon_blocks(self) -> None:
 		item_code = "_RFID ANT SCANREQ"
 		uom = self._ensure_master_data(item_code)
@@ -194,6 +228,54 @@ class TestAntennaFlow(FrappeTestCase):
 		)
 		self.assertTrue(res2.get("duplicate"))
 		self.assertEqual(frappe.db.count("Stock Entry", {"name": se_name}), 1)
+
+	def test_upsert_antenna_rule_case_insensitive(self) -> None:
+		frappe.db.delete("RFID Antenna Rule", {"device": ["in", ["case-device", "Case-Device"]]})
+
+		res1 = api.upsert_antenna_rule(
+			device="Case-Device",
+			antenna_id=3,
+			submit_stock_entry=1,
+			create_delivery_note=0,
+			submit_delivery_note=0,
+		)
+		self.assertTrue(res1.get("ok"))
+
+		res2 = api.upsert_antenna_rule(
+			device="case-device",
+			antenna_id=3,
+			submit_stock_entry=0,
+			create_delivery_note=0,
+			submit_delivery_note=0,
+		)
+		self.assertTrue(res2.get("ok"))
+
+		rows = frappe.get_all(
+			"RFID Antenna Rule",
+			filters={"antenna_id": 3, "device": "case-device"},
+			fields=["name", "device"],
+		)
+		self.assertEqual(len(rows), 1)
+		self.assertEqual(rows[0].get("device"), "case-device")
+
+	def test_ingest_tags_dedup_device_key_uses_device_id(self) -> None:
+		if not api._dedup_by_ant_enabled():
+			self.skipTest("dedup disabled")
+
+		device = "DEV 1"
+		epc = "EPC-ANT-DEDUP"
+		ant_id = 1
+		expected_key = f"{api.SEEN_PREFIX}{api._normalize_device_id(device) or device}:{ant_id}:{epc}"
+		sanitized_key = f"{api.SEEN_PREFIX}{api._sanitize_agent_id(device) or device}:{ant_id}:{epc}"
+
+		cache = frappe.cache()
+		cache.delete_value(expected_key)
+		cache.delete_value(sanitized_key)
+
+		api.ingest_tags(device=device, tags=[{"epcId": epc, "antId": ant_id, "count": 1}])
+
+		self.assertTrue(cache.get_value(expected_key, expires=True))
+		self.assertFalse(cache.get_value(sanitized_key, expires=True))
 
 	def test_ingest_tags_seq_regression(self) -> None:
 		api.edge_event_report(
