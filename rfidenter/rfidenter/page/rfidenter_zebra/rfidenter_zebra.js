@@ -89,6 +89,7 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 	const BATCH_POLL_INTERVAL_MS = 2000;
 	const BATCH_BACKOFF_BASE_MS = 1000;
 	const BATCH_BACKOFF_MAX_MS = 30000;
+	// Realtime scale UI is removed to prevent Android app logout; UI is status-driven only.
 
 	const state = {
 		connMode: String(window.localStorage.getItem(STORAGE_CONN_MODE) || "agent"),
@@ -512,32 +513,6 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 					.rfidenter-zebra .rfz-status:empty { display: none; }
 					.rfidenter-zebra .rfz-batch-status:empty,
 					.rfidenter-zebra .rfz-device-status:empty { display: none; }
-					.rfidenter-zebra .rfz-scale {
-						display: flex;
-						align-items: center;
-						justify-content: space-between;
-						gap: 12px;
-						padding: 10px 12px;
-						border: 1px solid var(--rf-border);
-						border-radius: 16px;
-						background: var(--control-bg, var(--rf-card-bg));
-					}
-					.rfidenter-zebra .rfz-scale-left {
-						display: flex;
-						align-items: center;
-						gap: 10px;
-					}
-					.rfidenter-zebra .rfz-scale-icon {
-						width: 40px;
-						height: 40px;
-						border-radius: 12px;
-						display: flex;
-						align-items: center;
-						justify-content: center;
-						background: var(--control-bg, var(--rf-card-bg));
-						border: 1px solid var(--rf-border);
-						color: inherit;
-					}
 					.rfidenter-zebra .rfz-table {
 						margin-top: 12px;
 						max-height: 320px;
@@ -557,16 +532,6 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 					.rfidenter-zebra .rfz-table thead th {
 						background: var(--table-header-bg, var(--control-bg, transparent));
 						font-weight: 700;
-					}
-					.rfidenter-zebra .rfz-scale-value {
-						font-weight: 600;
-						font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New",
-							monospace;
-						font-size: 18px;
-					}
-					.rfidenter-zebra .rfz-scale-meta {
-						font-size: 12px;
-						color: var(--rf-muted);
 					}
 					.rfidenter-zebra details.rfz-advanced > summary {
 						cursor: pointer;
@@ -742,23 +707,6 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 								</div>
 							</div>
 
-						<div class="row rfz-form-row" style="margin-top: 6px">
-							<div class="col-md-12">
-								<div class="rfz-scale">
-									<div class="rfz-scale-left">
-										<span class="rfz-scale-icon"><i class="fa fa-balance-scale"></i></span>
-										<div>
-											<div class="rfz-scale-value">--</div>
-											<div class="rfz-scale-meta">Ulanmagan</div>
-										</div>
-									</div>
-									<label class="checkbox-inline rfz-scale-autofill" style="margin: 0">
-										<input type="checkbox" checked /> Auto Qty/UOM
-									</label>
-								</div>
-							</div>
-						</div>
-
 						<div class="rfz-table table-responsive">
 							<table class="table table-bordered table-hover">
 								<thead>
@@ -933,13 +881,10 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 		const $copyStatus = $body.find(".rfidenter-copy-status");
 		const $epcList = $body.find(".rfidenter-epc-list");
 		const $itemGroupWrap = $body.find(".rfz-item-group");
-		const $itemWrap = $body.find(".rfz-item");
-		const $qtyWrap = $body.find(".rfz-qty");
+			const $itemWrap = $body.find(".rfz-item");
+			const $qtyWrap = $body.find(".rfz-qty");
 			const $uomWrap = $body.find(".rfz-uom");
 			const $antWrap = $body.find(".rfz-ant");
-			const $scaleValue = $body.find(".rfz-scale-value");
-			const $scaleMeta = $body.find(".rfz-scale-meta");
-			const $scaleAutofill = $body.find(".rfz-scale-autofill input");
 			const $itemPrint = $body.find(".rfz-print");
 			const $itemReadEpc = $body.find(".rfz-read-epc");
 			const $itemStop = $body.find(".rfz-stop");
@@ -949,7 +894,6 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 			const $itemRecentBody = $body.find(".rfz-recent");
 
 			const STORAGE_ITEM_QUEUE = "rfidenter.zebra.item_queue.v1";
-			const STORAGE_SCALE_AUTOFILL = "rfidenter.scale.autofill";
 
 		const itemState = {
 			controlsReady: false,
@@ -957,13 +901,6 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 			timer: null,
 			itemStockUom: "",
 			controls: { item_group: null, item: null, qty: null, uom: null, ant: null },
-		};
-		const scaleState = {
-			lastWeight: null,
-			lastUnit: "",
-			lastStable: null,
-			lastTs: 0,
-			timer: null,
 		};
 		const batchControl = { product: null };
 
@@ -1014,151 +951,6 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 			if (!s) return "";
 			// Avoid ZPL control characters inside ^FD ... ^FS.
 			return s.replaceAll("^", " ").replaceAll("~", " ").replace(/\s+/g, " ").trim().slice(0, 80);
-		}
-
-		function scaleAutofillEnabled() {
-			const raw = String(window.localStorage.getItem(STORAGE_SCALE_AUTOFILL) || "").trim().toLowerCase();
-			if (!raw) return true;
-			return raw === "1" || raw === "true" || raw === "yes" || raw === "on";
-		}
-
-		function setScaleAutofill(value) {
-			window.localStorage.setItem(STORAGE_SCALE_AUTOFILL, value ? "1" : "0");
-		}
-
-		function normalizeScaleUnit(raw) {
-			const s = String(raw || "").trim().toLowerCase();
-			if (!s) return "";
-			if (["kg", "kgs", "kilogram", "kilograms"].includes(s)) return "kg";
-			if (["g", "gram", "grams"].includes(s)) return "g";
-			if (["lb", "lbs", "pound", "pounds"].includes(s)) return "lb";
-			if (["oz", "ounce", "ounces"].includes(s)) return "oz";
-			return s;
-		}
-
-		function mapScaleUnitToUom(unit) {
-			const s = normalizeScaleUnit(unit);
-			const map = { kg: "Kg", g: "Gram", lb: "Pound", oz: "Ounce" };
-			return map[s] || "";
-		}
-
-		function isKgUom(raw) {
-			const s = String(raw || "").trim().toLowerCase();
-			if (!s) return false;
-			return s === "kg" || s === "kgs" || s === "kilogram" || s === "kilograms";
-		}
-
-		function formatScaleWeight(weight, unit) {
-			if (!Number.isFinite(weight)) return "--";
-			const val = Number(weight).toFixed(3);
-			const u = String(unit || "").trim();
-			return u ? `${val} ${u}` : val;
-		}
-
-		function formatScaleAge(ts) {
-			const n = Number(ts);
-			if (!Number.isFinite(n) || n <= 0) return "";
-			const delta = Date.now() - n;
-			if (delta < 1000) return "hozir";
-			if (delta < 60000) return `${Math.floor(delta / 1000)}s oldin`;
-			if (delta < 3600000) return `${Math.floor(delta / 60000)}m oldin`;
-			return fmtTime(n);
-		}
-
-		function parseScalePayload(payload) {
-			const data = payload?.reading || payload;
-			if (!data) return null;
-			const weight = Number(data.weight);
-			if (!Number.isFinite(weight)) return null;
-			const unit = normalizeScaleUnit(data.unit || "kg");
-			const stableRaw = data.stable;
-			const stable = stableRaw === true ? true : stableRaw === false ? false : null;
-			const ts = Number(data.ts || data.ts_ms || data.timestampMs || data.timestamp_ms || 0);
-			const port = String(data.port || "").trim();
-			const device = String(data.device || "").trim();
-			return { weight, unit, stable, ts, port, device };
-		}
-
-		function updateScaleUi(payload, { error = "" } = {}) {
-			if (!$scaleValue.length || !$scaleMeta.length) return;
-			if (!payload) {
-				$scaleValue.text("--");
-				$scaleMeta.text(error ? `Xato: ${error}` : "Ulanmagan");
-				return;
-			}
-			$scaleValue.text(formatScaleWeight(payload.weight, payload.unit));
-			const bits = [];
-			if (payload.port) bits.push(payload.port);
-			if (payload.stable === true) bits.push("stable");
-			if (payload.stable === false) bits.push("unstable");
-			const age = formatScaleAge(payload.ts);
-			if (age) bits.push(age);
-			$scaleMeta.text(bits.join(" · "));
-		}
-
-		function applyScaleToControls(payload) {
-			if (!payload) return;
-			if (!$scaleAutofill.length || !$scaleAutofill.is(":checked")) return;
-			if (!itemState.controlsReady) return;
-			if (!Number.isFinite(payload.weight)) return;
-			if (payload.stable === false) return;
-			if (!isKgUom(itemState.itemStockUom)) return;
-
-			const qtyControl = itemState.controls.qty;
-			const uomControl = itemState.controls.uom;
-			try {
-				const qtyInput = qtyControl?.$input;
-				if (qtyInput && qtyInput.is(":focus")) return;
-			} catch {
-				// ignore
-			}
-
-			qtyControl?.set_value?.(payload.weight);
-			const uom = mapScaleUnitToUom(payload.unit);
-			if (uom) {
-				uomControl?.set_value?.(uom);
-			}
-		}
-
-		function handleScalePayload(payload) {
-			const parsed = parseScalePayload(payload);
-			if (!parsed) return;
-			scaleState.lastWeight = parsed.weight;
-			scaleState.lastUnit = parsed.unit;
-			scaleState.lastStable = parsed.stable;
-			scaleState.lastTs = parsed.ts || Date.now();
-			updateScaleUi(parsed);
-			applyScaleToControls(parsed);
-		}
-
-		async function refreshScaleOnce({ quiet = false } = {}) {
-			const connMode = getConnMode();
-			if (connMode === "local") {
-				try {
-					const data = await zebraFetch("/api/v1/scale", { timeoutMs: 1500 });
-					if (!data || data.ok === false) {
-						if (!quiet) updateScaleUi(null, { error: data?.error || "" });
-						return;
-					}
-					handleScalePayload(data);
-					return;
-				} catch (e) {
-					if (!quiet) updateScaleUi(null, { error: e?.message || e });
-					// fall through to ERP fallback
-				}
-			}
-
-			try {
-				const r = await frappe.call("rfidenter.rfidenter.api.get_scale_weight");
-				const msg = r?.message;
-				if (!msg || msg.ok !== true) {
-					if (!quiet) updateScaleUi(null, { error: msg?.error || "" });
-					return;
-				}
-				handleScalePayload(msg.reading || msg);
-			} catch (e) {
-				if (!quiet) updateScaleUi(null, { error: e?.message || e });
-			}
 		}
 
 		function loadItemQueue() {
@@ -2378,26 +2170,7 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 	$copiesEnabled.on("change", () => updateCopies());
 	$printText.on("change", () => updateFeedBehavior());
 
-	// Realtime: resolve pending requests instantly (agent mode).
-	frappe.realtime.on("rfidenter_agent_reply", (reply) => {
-		try {
-			const requestId = String(reply?.request_id || "").trim();
-			const pending = state.pending.get(requestId);
-			if (!pending) return;
-			state.pending.delete(requestId);
-			window.clearTimeout(pending.timer);
-			pending.resolve(reply);
-		} catch {
-			// ignore
-		}
-	});
-	frappe.realtime.on("rfidenter_scale_weight", (payload) => {
-		try {
-			handleScalePayload(payload);
-		} catch {
-			// ignore
-		}
-	});
+	// Realtime channels are intentionally disabled to avoid Android app logout.
 
 	$batchDevice.on("change", () => {
 		setDeviceId($batchDevice.val());
@@ -2571,13 +2344,6 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 		$body.find(".rfidenter-zebra-feed").on("click", () => feedLabel());
 		$body.find(".rfidenter-zebra-write").on("click", () => doEncode());
 		$copyBtn.on("click", () => copyEpcList());
-		if ($scaleAutofill.length) {
-			$scaleAutofill.prop("checked", scaleAutofillEnabled());
-			$scaleAutofill.on("change", () => {
-				setScaleAutofill($scaleAutofill.is(":checked"));
-			});
-		}
-
 	updateMode();
 	updateCopies();
 	updateFeedBehavior();
@@ -2591,7 +2357,6 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 		ensureItemControls().catch(() => {});
 		renderItemQueue();
 		refreshRecentTags({ quiet: true }).catch(() => {});
-		refreshScaleOnce({ quiet: true }).catch(() => {});
 		processItemQueue().catch(() => {});
 		try {
 			window.addEventListener("online", () => processItemQueue().catch(() => {}));
@@ -2601,12 +2366,6 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 		try {
 			if (itemState.timer) window.clearInterval(itemState.timer);
 			itemState.timer = window.setInterval(() => processItemQueue().catch(() => {}), 5000);
-		} catch {
-			// ignore
-		}
-		try {
-			if (scaleState.timer) window.clearInterval(scaleState.timer);
-			scaleState.timer = window.setInterval(() => refreshScaleOnce({ quiet: true }).catch(() => {}), 100);
 		} catch {
 			// ignore
 		}
