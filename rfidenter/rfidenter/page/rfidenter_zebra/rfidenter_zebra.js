@@ -27,6 +27,23 @@ function fmtTime(ts) {
 	}
 }
 
+function parseServerTime(raw) {
+	const s = String(raw || "").trim();
+	if (!s) return 0;
+	const ts = Date.parse(s);
+	return Number.isFinite(ts) ? ts : 0;
+}
+
+function fmtServerTime(raw) {
+	const ts = parseServerTime(raw);
+	if (!ts) return "--";
+	try {
+		return new Date(ts).toLocaleString();
+	} catch {
+		return "--";
+	}
+}
+
 function isLoopbackUrl(raw) {
 	try {
 		const u = new URL(String(raw || ""));
