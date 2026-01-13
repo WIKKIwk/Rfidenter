@@ -65,6 +65,12 @@ function normalizeEpcHex(raw) {
 		.replace(/[^0-9A-F]/g, "");
 }
 
+function newEventId() {
+	if (window.crypto?.randomUUID) return window.crypto.randomUUID();
+	const rnd = Math.random().toString(16).slice(2, 10);
+	return `evt-${Date.now()}-${rnd}`;
+}
+
 frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 	const page = frappe.ui.make_app_page({
 		parent: wrapper,
