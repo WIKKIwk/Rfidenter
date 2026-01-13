@@ -2313,6 +2313,26 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 		}
 	});
 
+	$batchDevice.on("change", () => {
+		setDeviceId($batchDevice.val());
+		pollDeviceStatus({ quiet: true });
+	});
+	$batchDevice.on("keydown", (e) => {
+		if (e.key !== "Enter") return;
+		setDeviceId($batchDevice.val());
+		pollDeviceStatus({ quiet: true });
+	});
+	$batchId.on("change", () => {
+		setBatchId($batchId.val());
+	});
+	$batchId.on("keydown", (e) => {
+		if (e.key !== "Enter") return;
+		setBatchId($batchId.val());
+	});
+	$batchStart.on("click", () => startBatch());
+	$batchStop.on("click", () => stopBatch());
+	$batchSwitch.on("click", () => switchBatchProduct());
+
 	$connMode.on("change", () => {
 		autoFallbackAllowed = false;
 		setConnMode($connMode.val());
@@ -2322,6 +2342,7 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 
 	$connAgent.on("change", () => {
 		setSelectedAgentId($connAgent.val());
+		syncDeviceIdFromAgent();
 		refreshAll({ quiet: true });
 	});
 
@@ -2477,6 +2498,10 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 		setConnMode(getConnMode());
 		updateConnectionUi();
 		setBaseUrl(getBaseUrl());
+		ensureBatchControls();
+		setDeviceId(getDeviceId());
+		setBatchId(getBatchId());
+		setBatchProduct(getBatchProduct());
 		ensureItemControls().catch(() => {});
 		renderItemQueue();
 		refreshRecentTags({ quiet: true }).catch(() => {});
@@ -2500,4 +2525,11 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 			// ignore
 		}
 		refreshAll({ quiet: true });
+		try {
+			if (state.batch.pollTimer) window.clearInterval(state.batch.pollTimer);
+			state.batch.pollTimer = window.setInterval(() => pollDeviceStatus({ quiet: true }), 2000);
+		} catch {
+			// ignore
+		}
+		pollDeviceStatus({ quiet: true });
 	};
