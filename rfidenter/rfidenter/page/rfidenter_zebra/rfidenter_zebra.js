@@ -1166,6 +1166,7 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 			}
 
 			function renderItemQueue() {
+				if (!$itemQueue.length) return;
 				const q = loadItemQueue();
 				const pending = q.filter((j) => j && j.state !== "done").length;
 				$itemQueue.text(pending ? `Queue: ${pending}` : "");
