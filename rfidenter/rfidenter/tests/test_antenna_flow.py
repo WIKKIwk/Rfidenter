@@ -195,9 +195,9 @@ class TestAntennaFlow(FrappeTestCase, AccountsTestMixin):
 		epc = f"{self.EPC_PREFIX}000000000005"
 		self._create_tag(epc=epc, item_code=item_code, uom=uom, status="Printed", printed=True)
 
-		with patch.object(zebra_items, "_create_stock_entry_draft_for_tag", return_value="SE-TEST-001") as create_se, patch.object(
-			zebra_items, "_submit_stock_entry"
-		):
+		with patch.object(zebra_items, "_claim_for_processing", return_value=True) as claim, patch.object(
+			zebra_items, "_create_stock_entry_draft_for_tag", return_value="SE-TEST-001"
+		) as create_se, patch.object(zebra_items, "_submit_stock_entry"):
 			res1 = api.ingest_tags(
 				device=self.device_id,
 				event_id="evt-ant-3",
@@ -213,6 +213,7 @@ class TestAntennaFlow(FrappeTestCase, AccountsTestMixin):
 			self.assertEqual(tag.last_batch_id, self.batch_id)
 			self.assertEqual(int(tag.last_seq or 0), 3)
 			self.assertEqual(tag.last_device_id, self.device_id)
+			self.assertEqual(claim.call_count, 1)
 
 			res2 = api.ingest_tags(
 				device=self.device_id,
