@@ -221,6 +221,7 @@ class TestAntennaFlow(FrappeTestCase, AccountsTestMixin):
 				tags=[{"epcId": epc, "antId": 1, "count": 1}],
 			)
 			self.assertTrue(res1.get("ok"))
+			self.assertFalse(res1.get("duplicate"))
 			se_name = frappe.db.get_value("RFID Zebra Tag", epc, "purchase_receipt")
 			self.assertEqual(se_name, "SE-TEST-001")
 			tag = frappe.get_doc("RFID Zebra Tag", epc)
