@@ -67,6 +67,47 @@ class TestAntennaFlow(FrappeTestCase):
 		frappe.db.delete("RFID Zebra Item Receipt Setting", {"item_code": ["like", f"{self.TEST_PREFIX}%"]})
 		frappe.db.delete("RFID Delivery Note Setting", {"item_code": ["like", f"{self.TEST_PREFIX}%"]})
 
+	def _midday_local_ts_and_day(self) -> tuple[datetime.datetime, int, str]:
+		"""Return (aware_dt_local, ts_epoch_seconds, day_iso) in the ERP system timezone."""
+
+		def _get_system_timezone_name() -> str:
+			tz = ""
+			try:
+				from frappe.utils.data import get_system_timezone  # type: ignore
+
+				tz = str(get_system_timezone() or "")
+			except Exception:
+				tz = ""
+			if not tz:
+				try:
+					tz = str(frappe.get_system_settings("time_zone") or "")
+				except Exception:
+					tz = ""
+			tz = tz.strip() or "Asia/Kolkata"
+			return tz
+
+		tz_name = _get_system_timezone_name()
+		try:
+			from zoneinfo import ZoneInfo
+
+			tzinfo = ZoneInfo(tz_name)
+		except Exception as exc:
+			raise AssertionError(f"Invalid system timezone: {tz_name}") from exc
+
+		now_local = datetime.datetime.now(datetime.timezone.utc).astimezone(tzinfo)
+		day = now_local.date().isoformat()
+		aware_midday = datetime.datetime(
+			now_local.year,
+			now_local.month,
+			now_local.day,
+			12,
+			0,
+			0,
+			tzinfo=tzinfo,
+		)
+		ts_epoch = int(aware_midday.timestamp())
+		return aware_midday, ts_epoch, day
+
 	def _safe_select_option(self, doctype: str, fieldname: str, preferred: str) -> str:
 		meta = frappe.get_meta(doctype)
 		field = meta.get_field(fieldname)
@@ -77,21 +118,22 @@ class TestAntennaFlow(FrappeTestCase):
 			if not opt:
 				return True
 
-			lower = opt.lower()
-			if lower in {"none", "null"}:
-				return True
-
 			if re.fullmatch(r"-+", opt):
 				return True
 
-			compact = re.sub(r"[-_\s]+", "", lower)
-			if not compact:
+			lower = opt.lower()
+			trimmed = re.sub(r"^[\s\-_]+|[\s\-_]+$", "", lower).strip()
+			if trimmed in {"none", "null"}:
 				return True
 
-			if compact.startswith("select"):
+			select_pattern = re.compile(r"\bselect\b", flags=re.IGNORECASE)
+			if re.fullmatch(r"please\s+select", trimmed, flags=re.IGNORECASE):
 				return True
-
-			if "select" in compact and ("option" in compact or "choose" in compact):
+			if re.fullmatch(r"select(\s+an)?\s+option", trimmed, flags=re.IGNORECASE):
+				return True
+			if re.fullmatch(r"choose(\s+an)?\s+option", trimmed, flags=re.IGNORECASE):
+				return True
+			if select_pattern.search(trimmed) and re.fullmatch(r"select", trimmed, flags=re.IGNORECASE):
 				return True
 
 			return False
@@ -681,9 +723,7 @@ class TestAntennaFlow(FrappeTestCase):
 		)
 		state.insert(ignore_permissions=True)
 
-		now_local = frappe.utils.get_datetime(f"{frappe.utils.today()} 12:00:00")
-		ts_epoch = int(now_local.astimezone(datetime.timezone.utc).timestamp())
-		day = now_local.date().isoformat()
+		_, ts_epoch, day = self._midday_local_ts_and_day()
 
 		edge_before = frappe.db.count("RFID Edge Event", {"device_id": self.device_id})
 		state_before = frappe.db.get_value(
@@ -892,15 +932,18 @@ class TestAntennaFlow(FrappeTestCase):
 		cache_obj.delete_value(expected_key)
 		cache_obj.delete_value(sanitized_key)
 
+		CacheCls = type(cache_obj)
+		original_set_value = CacheCls.set_value
+		assert not getattr(original_set_value, "__rfid_test_patch__", False), "Cache set_value already patched"
+
 		def _capture_set_value(self, key, value, *args, **kwargs):
-			assert original_set_value is not CacheCls.set_value, "Recursion guard: original_set_value was patched"
+			assert getattr(CacheCls.set_value, "__rfid_test_patch__", False), "Cache patch sentinel missing"
+			assert original_set_value is not CacheCls.set_value, "Recursion guard: would recurse"
 			set_keys.append(key)
 			return original_set_value(self, key, value, *args, **kwargs)
 
 		set_keys: list[str] = []
-		CacheCls = type(cache_obj)
-		original_set_value = CacheCls.set_value
-		assert CacheCls.set_value is original_set_value, "Recursion guard: CacheCls.set_value already patched"
+		_capture_set_value.__rfid_test_patch__ = True  # type: ignore[attr-defined]
 
 		with patch.object(CacheCls, "set_value", new=_capture_set_value):
 			api.ingest_tags(device=device, tags=[{"epcId": epc, "antId": ant_id, "count": 1}])
