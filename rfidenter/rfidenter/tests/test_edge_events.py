@@ -163,6 +163,49 @@ class TestEdgeEvents(FrappeTestCase):
 		state = frappe.get_doc("RFID Batch State", {"device_id": self.device_id})
 		self.assertEqual(state.pending_product, item_code)
 
+	def test_device_snapshot_read_only(self) -> None:
+		api.edge_batch_start(
+			event_id="evt-snap-1",
+			device_id=self.device_id,
+			batch_id=self.batch_id,
+		)
+		before = frappe.db.count("RFID Edge Event", {"device_id": self.device_id})
+
+		res = api.get_device_snapshot(device_id=self.device_id)
+		self.assertTrue(res.get("ok"))
+
+		after = frappe.db.count("RFID Edge Event", {"device_id": self.device_id})
+		self.assertEqual(before, after)
+
+	def test_device_snapshot_fields(self) -> None:
+		device_id = self.agent_id
+		frappe.db.delete("RFID Edge Event", {"device_id": device_id})
+		frappe.db.delete("RFID Batch State", {"device_id": device_id})
+
+		api.edge_batch_start(
+			event_id="evt-snap-2",
+			device_id=device_id,
+			batch_id=self.batch_id,
+		)
+		api.agent_enqueue(agent_id=device_id, command="ping", args={"a": 1}, timeout_sec=5)
+
+		res = api.get_device_snapshot(device_id=device_id)
+		self.assertTrue(res.get("ok"))
+		self.assertTrue(res.get("server_time"))
+
+		state = res.get("state") or {}
+		self.assertEqual(state.get("device_id"), device_id)
+		self.assertEqual(state.get("status"), "Running")
+		self.assertEqual(state.get("current_batch_id"), self.batch_id)
+		self.assertTrue("last_seen_at" in state)
+		self.assertTrue("last_event_seq" in state)
+
+		queue_depths = res.get("queue_depths") or {}
+		self.assertTrue("print" in queue_depths)
+		self.assertTrue("erp" in queue_depths)
+		self.assertTrue("agent" in queue_depths)
+		self.assertEqual(queue_depths.get("agent"), 1)
+
 	def test_agent_queue_persists(self) -> None:
 		res = api.agent_enqueue(agent_id=self.agent_id, command="ping", args={"a": 1}, timeout_sec=5)
 		request_id = res.get("request_id")
