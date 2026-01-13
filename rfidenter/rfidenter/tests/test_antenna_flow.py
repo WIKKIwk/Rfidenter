@@ -365,6 +365,14 @@ class TestAntennaFlow(FrappeTestCase):
 			return "Purchase Receipt"
 		raise AssertionError(f"purchase_receipt doc not found: {name}")
 
+	def _count_tag_docs(self, fieldname: str) -> int:
+		names = frappe.db.get_all(
+			"RFID Zebra Tag",
+			filters={"epc": ["like", f"{self.EPC_PREFIX}%"], fieldname: ["!=", ""]},
+			pluck=fieldname,
+		)
+		return len({name for name in names if name})
+
 	def test_ingest_tags_without_event_id_no_stock_entry(self) -> None:
 		item_code = f"{self.TEST_PREFIX}-NOEVENT"
 		uom = self._ensure_master_data(item_code)
@@ -431,8 +439,8 @@ class TestAntennaFlow(FrappeTestCase):
 		)
 		saved_before = frappe.db.count("RFID Saved Tag", {"epc": ["like", f"{self.EPC_PREFIX}%"]})
 		dedupe_before = frappe.db.count("RFID Zebra Dedupe", {"idempotency_key": ["like", f"%{event_id}%"]})
-		stock_before = frappe.db.count("Stock Entry", {"remarks": ["like", f"%EVENT={event_id}%"]})
-		dn_before = frappe.db.count("Delivery Note", {"remarks": ["like", f"%EVENT={event_id}%"]})
+		stock_before = self._count_tag_docs("purchase_receipt")
+		dn_before = self._count_tag_docs("delivery_note")
 		tag_before = frappe.db.get_value(
 			"RFID Zebra Tag",
 			{"epc": epc},
@@ -460,8 +468,8 @@ class TestAntennaFlow(FrappeTestCase):
 		)
 		saved_after = frappe.db.count("RFID Saved Tag", {"epc": ["like", f"{self.EPC_PREFIX}%"]})
 		dedupe_after = frappe.db.count("RFID Zebra Dedupe", {"idempotency_key": ["like", f"%{event_id}%"]})
-		stock_after = frappe.db.count("Stock Entry", {"remarks": ["like", f"%EVENT={event_id}%"]})
-		dn_after = frappe.db.count("Delivery Note", {"remarks": ["like", f"%EVENT={event_id}%"]})
+		stock_after = self._count_tag_docs("purchase_receipt")
+		dn_after = self._count_tag_docs("delivery_note")
 		tag_after = frappe.db.get_value(
 			"RFID Zebra Tag",
 			{"epc": epc},
@@ -586,20 +594,41 @@ class TestAntennaFlow(FrappeTestCase):
 		if not api._dedup_by_ant_enabled():
 			self.skipTest("dedup disabled")
 
+		class _CaptureCache:
+			def __init__(self) -> None:
+				self.values: dict[str, object] = {}
+
+			def get_value(self, key, *args, **kwargs):
+				return self.values.get(key)
+
+			def set_value(self, key, value, *args, **kwargs):
+				self.values[key] = value
+
+			def delete_value(self, key, *args, **kwargs):
+				self.values.pop(key, None)
+
+			def hset(self, *args, **kwargs):
+				return None
+
+			def hgetall(self, *args, **kwargs):
+				return {}
+
+			def hdel(self, *args, **kwargs):
+				return None
+
 		device = "DEV 1"
 		epc = f"{self.EPC_PREFIX}000000000006"
 		ant_id = 1
 		expected_key = f"{api.SEEN_PREFIX}{api._normalize_device_id(device) or device}:{ant_id}:{epc}"
 		sanitized_key = f"{api.SEEN_PREFIX}{api._sanitize_agent_id(device) or device}:{ant_id}:{epc}"
 
-		cache = frappe.cache()
-		cache.delete_value(expected_key)
-		cache.delete_value(sanitized_key)
+		cache = _CaptureCache()
 
-		api.ingest_tags(device=device, tags=[{"epcId": epc, "antId": ant_id, "count": 1}])
+		with patch("frappe.cache", return_value=cache):
+			api.ingest_tags(device=device, tags=[{"epcId": epc, "antId": ant_id, "count": 1}])
 
-		self.assertTrue(cache.get_value(expected_key, expires=True))
-		self.assertFalse(cache.get_value(sanitized_key, expires=True))
+		self.assertTrue(cache.get_value(expected_key))
+		self.assertFalse(cache.get_value(sanitized_key))
 
 	def test_normalize_device_id_contract(self) -> None:
 		self.assertEqual(api._normalize_device_id(" DEV 1 "), "DEV 1")
