@@ -211,10 +211,11 @@ class TestAntennaFlow(FrappeTestCase, AccountsTestMixin):
 			)
 			return {"ok": True, "processed": 1}
 
+		event_id = f"evt-ant-printed-{frappe.generate_hash(length=8)}"
 		with patch.object(zebra_items, "process_tag_reads", side_effect=fake_process) as process:
 			res1 = api.ingest_tags(
 				device=self.device_id,
-				event_id="evt-ant-3",
+				event_id=event_id,
 				batch_id=self.batch_id,
 				seq=3,
 				tags=[{"epcId": epc, "antId": 1, "count": 1}],
@@ -223,14 +224,14 @@ class TestAntennaFlow(FrappeTestCase, AccountsTestMixin):
 			se_name = frappe.db.get_value("RFID Zebra Tag", epc, "purchase_receipt")
 			self.assertEqual(se_name, "SE-TEST-001")
 			tag = frappe.get_doc("RFID Zebra Tag", epc)
-			self.assertEqual(tag.last_event_id, "evt-ant-3")
+			self.assertEqual(tag.last_event_id, event_id)
 			self.assertEqual(tag.last_batch_id, self.batch_id)
 			self.assertEqual(int(tag.last_seq or 0), 3)
 			self.assertEqual(tag.last_device_id, self.device_id)
 
 			res2 = api.ingest_tags(
 				device=self.device_id,
-				event_id="evt-ant-3",
+				event_id=event_id,
 				batch_id=self.batch_id,
 				seq=3,
 				tags=[{"epcId": epc, "antId": 1, "count": 1}],
