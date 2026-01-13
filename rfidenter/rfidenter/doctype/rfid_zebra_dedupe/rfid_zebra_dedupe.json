@@ -15,6 +15,7 @@
   "doc_name",
   "epc",
   "last_error",
+  "claimed_at",
   "created_at"
  ],
  "fields": [
@@ -76,6 +77,11 @@
    "fieldname": "last_error",
    "fieldtype": "Small Text",
    "label": "Last Error"
+  },
+  {
+   "fieldname": "claimed_at",
+   "fieldtype": "Datetime",
+   "label": "Claimed At"
   },
   {
    "fieldname": "created_at",

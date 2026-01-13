@@ -43,15 +43,18 @@ class TestEdgeEvents(FrappeTestCase):
 			event_type="weight",
 			payload={"value": 2.0},
 		)
-		with self.assertRaises(frappe.ValidationError):
-			api.edge_event_report(
-				event_id="evt-3",
-				device_id=self.device_id,
-				batch_id=self.batch_id,
-				seq=1,
-				event_type="weight",
-				payload={"value": 1.0},
-			)
+		frappe.local.response = frappe._dict()
+		res = api.edge_event_report(
+			event_id="evt-3",
+			device_id=self.device_id,
+			batch_id=self.batch_id,
+			seq=1,
+			event_type="weight",
+			payload={"value": 1.0},
+		)
+		self.assertFalse(res.get("ok"))
+		self.assertEqual(res.get("code"), "SEQ_REGRESSION")
+		self.assertEqual(frappe.local.response.get("http_status_code"), 409)
 
 	def test_batch_start_stop_sets_state(self) -> None:
 		api.edge_batch_start(
@@ -161,6 +164,73 @@ class TestEdgeEvents(FrappeTestCase):
 		)
 		doc2 = zebra_items._create_stock_entry_draft_for_tag(
 			tag, ant_id=1, device="test", idempotency_key="idem-1", key_type="event_id"
+		)
+		self.assertEqual(doc1, doc2)
+		self.assertEqual(frappe.db.count("Stock Entry", {"name": doc1}), 1)
+
+	def test_zebra_dedupe_stale_claim_recovered(self) -> None:
+		company = frappe.db.get_value("Company", {}, "name")
+		warehouse = frappe.db.get_value("Warehouse", {"company": company}, "name") if company else None
+		if not company or not warehouse:
+			self.skipTest("Requires existing Company and Warehouse")
+
+		supplier = frappe.db.get_value("Supplier", {"supplier_name": "_RFID Test Supplier"}, "name")
+		if not supplier:
+			supplier = (
+				frappe.get_doc({"doctype": "Supplier", "supplier_name": "_RFID Test Supplier"})
+				.insert(ignore_permissions=True)
+				.name
+			)
+
+		customer = frappe.db.get_value("Customer", {"customer_name": "_RFID Test Customer"}, "name")
+		if not customer:
+			customer = (
+				frappe.get_doc({"doctype": "Customer", "customer_name": "_RFID Test Customer"})
+				.insert(ignore_permissions=True)
+				.name
+			)
+
+		item_code = "_RFID Dedupe Stale"
+		item = create_item(item_code, is_stock_item=1, warehouse=warehouse, company=company)
+		uom = item.stock_uom
+
+		if not frappe.db.exists("RFID Zebra Item Receipt Setting", {"item_code": item_code}):
+			frappe.get_doc(
+				{
+					"doctype": "RFID Zebra Item Receipt Setting",
+					"item_code": item_code,
+					"company": company,
+					"supplier": supplier,
+					"warehouse": warehouse,
+					"submit_purchase_receipt": 0,
+				}
+			).insert(ignore_permissions=True)
+
+		frappe.db.delete("RFID Zebra Dedupe", {"idempotency_key": "stock_entry:idem-stale"})
+
+		claim, created = zebra_items._claim_dedupe(
+			"idem-stale",
+			kind="stock_entry",
+			payload_hash="",
+			raw_key="idem-stale",
+			key_type="event_id",
+			epc="EPC9999",
+		)
+		self.assertTrue(created)
+		stale_at = frappe.utils.add_to_date(frappe.utils.now_datetime(), seconds=-300)
+		frappe.db.set_value(
+			"RFID Zebra Dedupe",
+			claim.name,
+			{"status": "CLAIMED", "claimed_at": stale_at, "doc_name": "", "doc_type": ""},
+			update_modified=False,
+		)
+
+		tag = {"epc": "EPC9999", "item_code": item_code, "qty": 1, "uom": uom}
+		doc1 = zebra_items._create_stock_entry_draft_for_tag(
+			tag, ant_id=1, device="test", idempotency_key="idem-stale", key_type="event_id"
+		)
+		doc2 = zebra_items._create_stock_entry_draft_for_tag(
+			tag, ant_id=1, device="test", idempotency_key="idem-stale", key_type="event_id"
 		)
 		self.assertEqual(doc1, doc2)
 		self.assertEqual(frappe.db.count("Stock Entry", {"name": doc1}), 1)

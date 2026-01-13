@@ -9,6 +9,9 @@ from typing import Any
 import frappe
 
 
+STALE_CLAIM_SEC = 120
+
+
 def _normalize_hex(raw: Any) -> str:
 	value = str(raw or "").strip().upper()
 	if not value:
@@ -61,6 +64,17 @@ def _payload_hash(payload: dict[str, Any]) -> str:
 		return ""
 
 
+def _is_claim_stale(doc: frappe.model.document.Document) -> bool:
+	claimed_at = getattr(doc, "claimed_at", None) or getattr(doc, "created_at", None)
+	if not claimed_at:
+		return True
+	try:
+		age = frappe.utils.now_datetime() - claimed_at
+		return age.total_seconds() > STALE_CLAIM_SEC
+	except Exception:
+		return True
+
+
 def _claim_dedupe(
 	idempotency_key: str,
 	*,
@@ -74,6 +88,7 @@ def _claim_dedupe(
 	if not dedupe_key:
 		return None, False
 
+	now = frappe.utils.now_datetime()
 	doc = frappe.get_doc(
 		{
 			"doctype": "RFID Zebra Dedupe",
@@ -84,7 +99,8 @@ def _claim_dedupe(
 			"status": "CLAIMED",
 			"payload_hash": payload_hash or "",
 			"epc": str(epc or "")[:128],
-			"created_at": frappe.utils.now_datetime(),
+			"claimed_at": now,
+			"created_at": now,
 		}
 	)
 	try:
@@ -93,7 +109,19 @@ def _claim_dedupe(
 	except Exception as exc:
 		if isinstance(exc, frappe.DuplicateEntryError) or "Duplicate entry" in str(exc):
 			try:
-				return frappe.get_doc("RFID Zebra Dedupe", dedupe_key), False
+				existing = frappe.get_doc("RFID Zebra Dedupe", dedupe_key)
+				status = str(getattr(existing, "status", "") or "")
+				doc_type = str(getattr(existing, "doc_type", "") or "")
+				doc_name = str(getattr(existing, "doc_name", "") or "")
+				if status == "DONE" and doc_type and doc_name:
+					return existing, False
+				if status == "CLAIMED" and _is_claim_stale(existing):
+					existing.status = "CLAIMED"
+					existing.claimed_at = now
+					existing.last_error = ""
+					existing.save(ignore_permissions=True)
+					return existing, True
+				return existing, False
 			except Exception:
 				return None, False
 		raise
