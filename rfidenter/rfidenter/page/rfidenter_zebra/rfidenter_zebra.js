@@ -1498,6 +1498,10 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 		state.batch.pollMode = "";
 	}
 
+	function stopPollingTimers() {
+		stopBatchPolling();
+	}
+
 	function startBatchPolling() {
 		if (state.batch.authBlocked) return;
 		stopBatchPolling();
@@ -1552,7 +1556,7 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 		if (blocked) stopBatchPolling();
 	}
 
-	function showBatchConflict(info) {
+	function showBatchConflict(info, { quiet = false } = {}) {
 		const raw = String(info?.code || "").trim();
 		let code = raw;
 		if (!code) {
@@ -1563,23 +1567,27 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 			}
 			const label = code ? `Conflict: ${code}` : "Conflict";
 			setPill($batchStatus, label, { indicator: "orange", title: info?.errorText || "" });
-			frappe.msgprint({
-				title: "Conflict",
-				message: escapeHtml(info?.errorText || code || "Conflict"),
-				indicator: "orange",
-			});
+			if (!quiet) {
+				frappe.msgprint({
+					title: "Conflict",
+					message: escapeHtml(info?.errorText || code || "Conflict"),
+					indicator: "orange",
+				});
+			}
 		}
 
-	function showBatchError(err) {
+	function showBatchError(err, { quiet = false } = {}) {
 		const info = parseCallError(err);
 		if (isAuthError(info)) {
 			setAuthBlocked(true, "Auth required");
 			setPill($batchStatus, "Auth error", { indicator: "red", title: info?.errorText || "" });
-			frappe.msgprint({
-				title: "Auth error",
-				message: escapeHtml(info?.errorText || "Token/role xato."),
-				indicator: "red",
-			});
+			if (!quiet) {
+				frappe.msgprint({
+					title: "Auth error",
+					message: escapeHtml(info?.errorText || "Token/role xato."),
+					indicator: "red",
+				});
+			}
 			return;
 		}
 		if (info.status === 429 || info.status === 503) {
@@ -1588,11 +1596,11 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 			return;
 		}
 		if (info.status === 409) {
-			showBatchConflict(info);
+			showBatchConflict(info, { quiet });
 			return;
 		}
 		setPill($batchStatus, "Xato", { indicator: "orange", title: info?.errorText || "" });
-			if (info?.errorText) {
+			if (info?.errorText && !quiet) {
 				frappe.msgprint({ title: "Batch xatosi", message: escapeHtml(info.errorText), indicator: "red" });
 			}
 		}
@@ -1636,40 +1644,17 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 
 			state.batch.lastEventSeq = Number.isFinite(Number(lastSeq)) ? Number(lastSeq) : state.batch.lastEventSeq;
 
-			const printDepth = meta?.print_outbox_depth ?? data?.print_outbox_depth;
-			const erpDepth = meta?.erp_outbox_depth ?? data?.erp_outbox_depth;
-			const agentDepth = meta?.agent_queue_depth ?? data?.agent_queue_depth;
+			const printDepth = meta?.print ?? meta?.print_outbox_depth ?? data?.print_outbox_depth;
+			const erpDepth = meta?.erp ?? meta?.erp_outbox_depth ?? data?.erp_outbox_depth;
+			const agentDepth = meta?.agent ?? meta?.agent_queue_depth ?? data?.agent_queue_depth;
 			setBatchQueue($batchQueuePrint, printDepth);
 			setBatchQueue($batchQueueErp, erpDepth);
 			setBatchQueue($batchQueueAgent, agentDepth);
 		}
 
-	async function fetchBatchState(deviceId) {
-		try {
-			const r = await frappe.call("frappe.client.get_value", {
-				doctype: "RFID Batch State",
-					filters: { device_id: deviceId },
-					fieldname: [
-						"status",
-						"pause_reason",
-						"current_batch_id",
-						"current_product",
-						"pending_product",
-						"last_event_seq",
-						"last_seen_at",
-					],
-					as_dict: 1,
-				});
-				return r?.message || null;
-		} catch {
-			return null;
-		}
-	}
-
-	async function fetchDeviceStatus(deviceId, batchId) {
-		const payload = { event_id: newEventId(), device_id: deviceId };
-		if (batchId) payload.batch_id = batchId;
-		const r = await frappe.call("rfidenter.device_status", payload);
+	async function fetchDeviceSnapshot(deviceId) {
+		const payload = { device_id: deviceId };
+		const r = await frappe.call("rfidenter.get_device_snapshot", payload);
 		const msg = r?.message;
 		if (!msg || msg.ok !== true) throw new Error("Status olinmadi");
 		return msg;
@@ -1686,18 +1671,16 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 			setBatchControlsEnabled(true);
 			setAuthBanner(false);
 			try {
-				const batchId = getBatchId();
-				const msg = await fetchDeviceStatus(deviceId, batchId);
+				const msg = await fetchDeviceSnapshot(deviceId);
 				resetBatchBackoff();
-				const stateData = msg.state || (await fetchBatchState(deviceId));
-				if (stateData) {
-					renderBatchState(stateData, msg);
+				if (msg.state) {
+					renderBatchState(msg.state, msg.queue_depths);
 					setPill($batchStatus, "");
 				} else if (!quiet) {
 				setPill($batchStatus, "State topilmadi", { indicator: "orange" });
 			}
 		} catch (err) {
-			showBatchError(err);
+			showBatchError(err, { quiet });
 		}
 		}
 
@@ -1708,7 +1691,7 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 				if (!msg || msg.ok !== true) throw new Error(msg?.error || "Xato");
 				return msg;
 			} catch (err) {
-				showBatchError(err);
+				showBatchError(err, { quiet: false });
 				return null;
 			}
 		}
@@ -2377,7 +2360,7 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 		}
 		pollDeviceStatus({ quiet: true });
 		try {
-			$(wrapper).on("hide", () => stopBatchPolling());
+			$(wrapper).on("hide", () => stopPollingTimers());
 			$(wrapper).on("show", () => {
 				startBatchPolling();
 				pollDeviceStatus({ quiet: true });
@@ -2386,7 +2369,26 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 			// ignore
 		}
 		try {
-			window.addEventListener("beforeunload", () => stopBatchPolling());
+			window.addEventListener("beforeunload", () => stopPollingTimers());
+		} catch {
+			// ignore
+		}
+		try {
+			document.addEventListener("visibilitychange", () => {
+				if (document.hidden) {
+					stopPollingTimers();
+					return;
+				}
+				startBatchPolling();
+				pollDeviceStatus({ quiet: true });
+			});
+		} catch {
+			// ignore
+		}
+		try {
+			if (frappe?.router?.on) {
+				frappe.router.on("change", () => stopPollingTimers());
+			}
 		} catch {
 			// ignore
 		}
