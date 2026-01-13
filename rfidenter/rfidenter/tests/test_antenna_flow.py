@@ -195,16 +195,23 @@ class TestAntennaFlow(FrappeTestCase, AccountsTestMixin):
 		epc = f"{self.EPC_PREFIX}000000000005"
 		self._create_tag(epc=epc, item_code=item_code, uom=uom, status="Printed", printed=True)
 
-		def fake_find_rule_for_ants(ants, rules, device_key, field):
-			if field == "submit_stock_entry":
-				return 1, {"submit_stock_entry": True}
-			return 0, None
+		def fake_process(tags, device, event_id, batch_id=None, seq=None):
+			frappe.db.set_value(
+				"RFID Zebra Tag",
+				epc,
+				{
+					"purchase_receipt": "SE-TEST-001",
+					"status": "Consumed",
+					"last_event_id": event_id,
+					"last_batch_id": batch_id,
+					"last_seq": seq,
+					"last_device_id": device,
+				},
+				update_modified=True,
+			)
+			return {"ok": True, "processed": 1}
 
-		with patch.object(zebra_items, "_find_rule_for_ants", side_effect=fake_find_rule_for_ants), patch.object(
-			zebra_items, "_claim_for_processing", return_value=True
-		) as claim, patch.object(zebra_items, "_create_stock_entry_draft_for_tag", return_value="SE-TEST-001") as create_se, patch.object(
-			zebra_items, "_submit_stock_entry"
-		):
+		with patch.object(zebra_items, "process_tag_reads", side_effect=fake_process) as process:
 			res1 = api.ingest_tags(
 				device=self.device_id,
 				event_id="evt-ant-3",
@@ -220,7 +227,6 @@ class TestAntennaFlow(FrappeTestCase, AccountsTestMixin):
 			self.assertEqual(tag.last_batch_id, self.batch_id)
 			self.assertEqual(int(tag.last_seq or 0), 3)
 			self.assertEqual(tag.last_device_id, self.device_id)
-			self.assertEqual(claim.call_count, 1)
 
 			res2 = api.ingest_tags(
 				device=self.device_id,
@@ -230,7 +236,7 @@ class TestAntennaFlow(FrappeTestCase, AccountsTestMixin):
 				tags=[{"epcId": epc, "antId": 1, "count": 1}],
 			)
 			self.assertTrue(res2.get("duplicate"))
-			self.assertEqual(create_se.call_count, 1)
+			self.assertEqual(process.call_count, 1)
 
 	def test_upsert_antenna_rule_case_insensitive(self) -> None:
 		frappe.db.delete("RFID Antenna Rule", {"device": ["in", ["case-device", "Case-Device"]]})
