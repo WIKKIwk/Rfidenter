@@ -34,6 +34,39 @@ class TestEdgeEvents(FrappeTestCase):
 		state = frappe.get_doc("RFID Batch State", {"device_id": self.device_id})
 		self.assertEqual(int(state.last_event_seq or 0), 1)
 
+	def test_event_report_duplicate_by_event_id(self) -> None:
+		event_id = "evt-name-mismatch"
+		frappe.db.delete("RFID Edge Event", {"event_id": event_id})
+
+		doc = frappe.get_doc(
+			{
+				"doctype": "RFID Edge Event",
+				"event_id": event_id,
+				"device_id": self.device_id,
+				"batch_id": self.batch_id,
+				"seq": 1,
+				"event_type": "event_report",
+				"payload_json": "{}",
+				"payload_hash": "",
+				"received_at": frappe.utils.now_datetime(),
+				"processed": 0,
+			}
+		).insert(ignore_permissions=True)
+
+		new_name = f"EDGE-{frappe.generate_hash(length=8)}"
+		frappe.rename_doc("RFID Edge Event", doc.name, new_name, force=True)
+
+		res = api.edge_event_report(
+			event_id=event_id,
+			device_id=self.device_id,
+			batch_id=self.batch_id,
+			seq=2,
+			event_type="weight",
+			payload={"value": 1.0},
+		)
+		self.assertTrue(res.get("duplicate"))
+		self.assertEqual(frappe.db.count("RFID Edge Event", {"event_id": event_id}), 1)
+
 	def test_seq_regression_rejected(self) -> None:
 		api.edge_event_report(
 			event_id="evt-2",
