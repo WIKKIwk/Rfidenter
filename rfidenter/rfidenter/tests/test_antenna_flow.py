@@ -99,22 +99,50 @@ class TestAntennaFlow(FrappeTestCase):
 		else:
 			currency = self._ensure_currency("USD")
 			country = self._ensure_country("India")
-			company = frappe.get_doc(
-				{
-					"doctype": "Company",
-					"company_name": self.COMPANY_NAME,
-					"abbr": self.COMPANY_ABBR,
-					"default_currency": currency,
-					"country": country,
-				}
-			)
+			values = {
+				"doctype": "Company",
+				"company_name": self.COMPANY_NAME,
+				"abbr": self.COMPANY_ABBR,
+				"default_currency": currency,
+				"country": country,
+			}
+			company_meta = frappe.get_meta("Company")
+			if company_meta.get_field("create_chart_of_accounts_based_on"):
+				values["create_chart_of_accounts_based_on"] = self._safe_select_option(
+					"Company",
+					"create_chart_of_accounts_based_on",
+					"Standard Template",
+				)
+			if company_meta.get_field("chart_of_accounts"):
+				values["chart_of_accounts"] = "Standard"
+			for field in company_meta.fields:
+				if not getattr(field, "reqd", 0):
+					continue
+				if field.fieldname in values and values[field.fieldname]:
+					continue
+				if field.fieldtype == "Check":
+					values[field.fieldname] = 0
+				elif field.fieldtype == "Data":
+					values[field.fieldname] = f"{self.TEST_PREFIX} {field.fieldname}"
+				elif field.fieldtype == "Select":
+					values[field.fieldname] = self._safe_select_option("Company", field.fieldname, "")
+				else:
+					raise AssertionError(f"Unsupported required Company field: {field.fieldname} ({field.fieldtype})")
+			company = frappe.get_doc(values)
 			try:
-				frappe.local.flags.ignore_chart_of_accounts = True
 				company.insert(ignore_permissions=True)
 			except Exception as exc:
 				raise AssertionError(f"Company creation failed: {exc}") from exc
-			finally:
-				frappe.local.flags.ignore_chart_of_accounts = False
+
+		if frappe.get_meta("Company").get_field("chart_of_accounts") and not (company.get("chart_of_accounts") or ""):
+			company.db_set("chart_of_accounts", "Standard", update_modified=False)
+			company.reload()
+
+		if not frappe.db.exists("Account", {"company": company.name}):
+			try:
+				company.create_default_accounts()
+			except Exception as exc:
+				raise AssertionError(f"Default accounts creation failed: {exc}") from exc
 
 		self.company = company.name
 		self.company_abbr = company.abbr
@@ -122,6 +150,15 @@ class TestAntennaFlow(FrappeTestCase):
 
 	def _ensure_accounts(self) -> None:
 		company = frappe.get_doc("Company", self.company)
+
+		expense_parent = frappe.db.get_value(
+			"Account",
+			{"company": self.company, "root_type": "Expense", "is_group": 1},
+			"name",
+			order_by="lft asc",
+		)
+		if not expense_parent:
+			raise AssertionError("Expense parent account missing for test company.")
 
 		expense_root = frappe.db.get_value(
 			"Account",
@@ -133,14 +170,11 @@ class TestAntennaFlow(FrappeTestCase):
 				{
 					"doctype": "Account",
 					"account_name": f"{self.TEST_PREFIX} Expenses",
+					"parent_account": expense_parent,
 					"is_group": 1,
-					"root_type": "Expense",
-					"report_type": "Profit and Loss",
 					"company": self.company,
 				}
 			)
-			expense_root_doc.flags.ignore_mandatory = True
-			expense_root_doc.flags.ignore_root_company_validation = True
 			try:
 				expense_root_doc.insert(ignore_permissions=True)
 			except Exception as exc:
@@ -163,12 +197,20 @@ class TestAntennaFlow(FrappeTestCase):
 					"company": self.company,
 				}
 			)
-			stock_adj_doc.flags.ignore_root_company_validation = True
 			try:
 				stock_adj_doc.insert(ignore_permissions=True)
 			except Exception as exc:
 				raise AssertionError(f"Stock adjustment account creation failed: {exc}") from exc
 			stock_adj = stock_adj_doc.name
+
+		asset_parent = frappe.db.get_value(
+			"Account",
+			{"company": self.company, "root_type": "Asset", "is_group": 1},
+			"name",
+			order_by="lft asc",
+		)
+		if not asset_parent:
+			raise AssertionError("Asset parent account missing for test company.")
 
 		asset_root = frappe.db.get_value(
 			"Account",
@@ -180,14 +222,11 @@ class TestAntennaFlow(FrappeTestCase):
 				{
 					"doctype": "Account",
 					"account_name": f"{self.TEST_PREFIX} Assets",
+					"parent_account": asset_parent,
 					"is_group": 1,
-					"root_type": "Asset",
-					"report_type": "Balance Sheet",
 					"company": self.company,
 				}
 			)
-			asset_root_doc.flags.ignore_mandatory = True
-			asset_root_doc.flags.ignore_root_company_validation = True
 			try:
 				asset_root_doc.insert(ignore_permissions=True)
 			except Exception as exc:
@@ -210,7 +249,6 @@ class TestAntennaFlow(FrappeTestCase):
 					"company": self.company,
 				}
 			)
-			stock_inventory_doc.flags.ignore_root_company_validation = True
 			try:
 				stock_inventory_doc.insert(ignore_permissions=True)
 			except Exception as exc:
@@ -218,31 +256,31 @@ class TestAntennaFlow(FrappeTestCase):
 			stock_inventory = stock_inventory_doc.name
 
 		company.db_set("stock_adjustment_account", stock_adj)
-		company.db_set("default_inventory_account", stock_inventory)
+		if frappe.get_meta("Company").get_field("default_inventory_account"):
+			company.db_set("default_inventory_account", stock_inventory)
 
 	def _ensure_cost_centers(self) -> None:
 		company = frappe.get_doc("Company", self.company)
 
 		root_name = frappe.db.get_value(
 			"Cost Center",
-			{"company": self.company, "cost_center_name": self.company, "is_group": 1},
+			{"company": self.company, "is_group": 1},
 			"name",
+			order_by="lft asc",
 		)
 		if not root_name:
-			root_doc = frappe.get_doc(
-				{
-					"doctype": "Cost Center",
-					"cost_center_name": self.company,
-					"is_group": 1,
-					"company": self.company,
-				}
-			)
-			root_doc.flags.ignore_mandatory = True
 			try:
-				root_doc.insert(ignore_permissions=True)
+				company.create_default_cost_center()
 			except Exception as exc:
-				raise AssertionError(f"Root cost center creation failed: {exc}") from exc
-			root_name = root_doc.name
+				raise AssertionError(f"Default cost center creation failed: {exc}") from exc
+			root_name = frappe.db.get_value(
+				"Cost Center",
+				{"company": self.company, "is_group": 1},
+				"name",
+				order_by="lft asc",
+			)
+			if not root_name:
+				raise AssertionError("Root cost center missing after create_default_cost_center().")
 
 		leaf_cc_name = f"{self.TEST_PREFIX} Main"
 		leaf = frappe.db.get_value(
@@ -326,6 +364,17 @@ class TestAntennaFlow(FrappeTestCase):
 		if not field or not getattr(field, "reqd", 0):
 			return ""
 
+		group_meta = frappe.get_meta(group_doctype)
+		parent_field = None
+		for group_field_meta in group_meta.fields:
+			if (
+				group_field_meta.fieldtype == "Link"
+				and group_field_meta.options == group_doctype
+				and str(group_field_meta.fieldname or "").startswith("parent_")
+			):
+				parent_field = group_field_meta.fieldname
+				break
+
 		root_name = f"{self.TEST_PREFIX} {group_doctype} Root"
 		if not frappe.db.exists(group_doctype, root_name):
 			frappe.get_doc(
@@ -338,12 +387,6 @@ class TestAntennaFlow(FrappeTestCase):
 
 		leaf_name = f"{self.TEST_PREFIX} {group_doctype}"
 		if not frappe.db.exists(group_doctype, leaf_name):
-			parent_field = None
-			if group_doctype == "Supplier Group":
-				parent_field = "parent_supplier_group"
-			elif group_doctype == "Customer Group":
-				parent_field = "parent_customer_group"
-
 			values = {
 				"doctype": group_doctype,
 				group_field: leaf_name,
@@ -548,7 +591,7 @@ class TestAntennaFlow(FrappeTestCase):
 		)
 		state.insert(ignore_permissions=True)
 
-		cache = frappe.cache()
+		day = frappe.utils.today()
 		edge_before = frappe.db.count("RFID Edge Event", {"device_id": self.device_id})
 		state_before = frappe.db.get_value(
 			"RFID Batch State",
@@ -556,8 +599,18 @@ class TestAntennaFlow(FrappeTestCase):
 			["last_seen_at", "modified"],
 			as_dict=True,
 		)
-		saved_before = frappe.db.count("RFID Saved Tag", {"epc": ["like", f"{self.EPC_PREFIX}%"]})
-		saved_day_before = frappe.db.count("RFID Saved Tag Day", {"epc": ["like", f"{self.EPC_PREFIX}%"]})
+		saved_before = frappe.db.get_value(
+			"RFID Saved Tag",
+			{"epc": epc},
+			["reads", "last_seen", "modified"],
+			as_dict=True,
+		)
+		saved_day_before = frappe.db.get_value(
+			"RFID Saved Tag Day",
+			{"epc": epc, "day": day},
+			["reads", "last_seen", "modified"],
+			as_dict=True,
+		)
 		dedupe_before = frappe.db.count("RFID Zebra Dedupe", {"idempotency_key": ["like", f"%{event_id}%"]})
 		stock_before = self._count_tag_docs("purchase_receipt")
 		dn_before = self._count_tag_docs("delivery_note")
@@ -586,8 +639,18 @@ class TestAntennaFlow(FrappeTestCase):
 			["last_seen_at", "modified"],
 			as_dict=True,
 		)
-		saved_after = frappe.db.count("RFID Saved Tag", {"epc": ["like", f"{self.EPC_PREFIX}%"]})
-		saved_day_after = frappe.db.count("RFID Saved Tag Day", {"epc": ["like", f"{self.EPC_PREFIX}%"]})
+		saved_after = frappe.db.get_value(
+			"RFID Saved Tag",
+			{"epc": epc},
+			["reads", "last_seen", "modified"],
+			as_dict=True,
+		)
+		saved_day_after = frappe.db.get_value(
+			"RFID Saved Tag Day",
+			{"epc": epc, "day": day},
+			["reads", "last_seen", "modified"],
+			as_dict=True,
+		)
 		dedupe_after = frappe.db.count("RFID Zebra Dedupe", {"idempotency_key": ["like", f"%{event_id}%"]})
 		stock_after = self._count_tag_docs("purchase_receipt")
 		dn_after = self._count_tag_docs("delivery_note")
@@ -731,18 +794,19 @@ class TestAntennaFlow(FrappeTestCase):
 		expected_key = f"{api.SEEN_PREFIX}{api._normalize_device_id(device) or device}:{ant_id}:{epc}"
 		sanitized_key = f"{api.SEEN_PREFIX}{api._sanitize_agent_id(device) or device}:{ant_id}:{epc}"
 
-		cache = frappe.cache()
-		cache.delete_value(expected_key)
-		cache.delete_value(sanitized_key)
+		cache_obj = frappe.cache()
+		cache_obj.delete_value(expected_key)
+		cache_obj.delete_value(sanitized_key)
 
 		set_keys: list[str] = []
-		original_set_value = cache.set_value
+		CacheCls = type(cache_obj)
+		original_set_value = CacheCls.set_value
 
-		def _capture_set_value(key, value, *args, **kwargs):
+		def _capture_set_value(self, key, value, *args, **kwargs):
 			set_keys.append(key)
-			return original_set_value(key, value, *args, **kwargs)
+			return original_set_value(self, key, value, *args, **kwargs)
 
-		with patch.object(cache, "set_value", side_effect=_capture_set_value):
+		with patch.object(CacheCls, "set_value", new=_capture_set_value):
 			api.ingest_tags(device=device, tags=[{"epcId": epc, "antId": ant_id, "count": 1}])
 
 		self.assertIn(expected_key, set_keys)
