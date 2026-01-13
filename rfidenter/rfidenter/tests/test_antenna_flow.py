@@ -624,7 +624,7 @@ class TestAntennaFlow(FrappeTestCase):
 
 		cache = _CaptureCache()
 
-		with patch("frappe.cache", return_value=cache):
+		with patch("rfidenter.rfidenter.api.frappe.cache", return_value=cache):
 			api.ingest_tags(device=device, tags=[{"epcId": epc, "antId": ant_id, "count": 1}])
 
 		self.assertTrue(cache.get_value(expected_key))
