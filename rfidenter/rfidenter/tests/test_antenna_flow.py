@@ -5,13 +5,18 @@ from unittest.mock import patch
 import frappe
 from frappe.tests.utils import FrappeTestCase
 from erpnext.stock.doctype.item.test_item import create_item
+from erpnext.accounts.test.accounts_mixin import AccountsTestMixin
 
 from rfidenter.rfidenter import api
+from rfidenter.rfidenter import zebra_items
 
 
-class TestAntennaFlow(FrappeTestCase):
+class TestAntennaFlow(FrappeTestCase, AccountsTestMixin):
 	def setUp(self) -> None:
 		frappe.set_user("Administrator")
+		self.create_company(company_name="_RFID Test Company", abbr="_RTC")
+		self.create_supplier(supplier_name="_RFID Test Supplier")
+		self.create_customer(customer_name="_RFID Test Customer")
 		self.device_id = "ant-device-test"
 		self.batch_id = "ant-batch-test"
 		frappe.db.delete("RFID Edge Event", {"device_id": self.device_id})
@@ -20,28 +25,7 @@ class TestAntennaFlow(FrappeTestCase):
 		frappe.db.delete("RFID Antenna Rule", {"device": self.device_id})
 
 	def _ensure_master_data(self, item_code: str) -> str:
-		company = frappe.db.get_value("Company", {}, "name")
-		warehouse = frappe.db.get_value("Warehouse", {"company": company}, "name") if company else None
-		if not company or not warehouse:
-			self.skipTest("Requires existing Company and Warehouse")
-
-		supplier = frappe.db.get_value("Supplier", {"supplier_name": "_RFID Test Supplier"}, "name")
-		if not supplier:
-			supplier = (
-				frappe.get_doc({"doctype": "Supplier", "supplier_name": "_RFID Test Supplier"})
-				.insert(ignore_permissions=True)
-				.name
-			)
-
-		customer = frappe.db.get_value("Customer", {"customer_name": "_RFID Test Customer"}, "name")
-		if not customer:
-			customer = (
-				frappe.get_doc({"doctype": "Customer", "customer_name": "_RFID Test Customer"})
-				.insert(ignore_permissions=True)
-				.name
-			)
-
-		item = create_item(item_code, is_stock_item=1, warehouse=warehouse, company=company)
+		item = create_item(item_code, is_stock_item=1, warehouse=self.warehouse, company=self.company)
 		uom = item.stock_uom
 
 		if not frappe.db.exists("RFID Zebra Item Receipt Setting", {"item_code": item_code}):
@@ -49,9 +33,9 @@ class TestAntennaFlow(FrappeTestCase):
 				{
 					"doctype": "RFID Zebra Item Receipt Setting",
 					"item_code": item_code,
-					"company": company,
-					"supplier": supplier,
-					"warehouse": warehouse,
+					"company": self.company,
+					"supplier": self.supplier,
+					"warehouse": self.warehouse,
 					"submit_purchase_receipt": 0,
 				}
 			).insert(ignore_permissions=True)
@@ -61,9 +45,9 @@ class TestAntennaFlow(FrappeTestCase):
 				{
 					"doctype": "RFID Delivery Note Setting",
 					"item_code": item_code,
-					"company": company,
-					"customer": customer,
-					"warehouse": warehouse,
+					"company": self.company,
+					"customer": self.customer,
+					"warehouse": self.warehouse,
 					"default_rate": 0,
 				}
 			).insert(ignore_permissions=True)
@@ -152,7 +136,9 @@ class TestAntennaFlow(FrappeTestCase):
 		)
 
 		saved_before = frappe.db.count("RFID Saved Tag", {"epc": epc})
-		with patch("frappe.publish_realtime") as publish:
+		with patch("frappe.publish_realtime") as publish, patch.object(
+			zebra_items, "process_tag_reads"
+		) as zebra_process:
 			res = api.ingest_tags(
 				device=self.device_id,
 				event_id="evt-ant-dup",
@@ -161,6 +147,7 @@ class TestAntennaFlow(FrappeTestCase):
 				tags=[{"epcId": epc, "antId": 1, "count": 1}],
 			)
 			publish.assert_not_called()
+			zebra_process.assert_not_called()
 
 		self.assertTrue(res.get("duplicate"))
 		saved_after = frappe.db.count("RFID Saved Tag", {"epc": epc})
@@ -276,6 +263,14 @@ class TestAntennaFlow(FrappeTestCase):
 
 		self.assertTrue(cache.get_value(expected_key, expires=True))
 		self.assertFalse(cache.get_value(sanitized_key, expires=True))
+
+	def test_normalize_device_id_contract(self) -> None:
+		self.assertEqual(api._normalize_device_id(" DEV 1 "), "DEV 1")
+		self.assertEqual(api._normalize_device_id("DEVICE-XYZ"), "DEVICE-XYZ")
+		self.assertEqual(api._normalize_device_id(""), "")
+		self.assertEqual(api._normalize_device_id(None), "")
+		self.assertEqual(api._normalize_device_id("A" * 80), "A" * 64)
+		self.assertEqual(api._normalize_device_id("Девайс"), "Девайс")
 
 	def test_ingest_tags_seq_regression(self) -> None:
 		api.edge_event_report(
