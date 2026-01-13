@@ -61,26 +61,97 @@ class TestAntennaFlow(FrappeTestCase):
 			except Exception:
 				pass
 
-		if not company.stock_adjustment_account:
-			stock_adj = frappe.db.get_value(
-				"Account", {"company": company.name, "account_type": "Stock Adjustment", "is_group": 0}, "name"
-			)
-			if not stock_adj:
-				stock_adj = frappe.db.get_value(
-					"Account", {"company": company.name, "root_type": "Expense", "is_group": 0}, "name"
-				)
-			if stock_adj:
-				company.db_set("stock_adjustment_account", stock_adj)
-
-		if not company.cost_center:
-			cost_center = frappe.db.get_value(
-				"Cost Center", {"company": company.name, "is_group": 0}, "name"
-			)
-			if cost_center:
-				company.db_set("cost_center", cost_center)
+		self._ensure_stock_adjustment_account(company)
+		self._ensure_cost_center(company)
 
 		self.company = company.name
 		self.company_abbr = company.abbr or "RFT"
+
+	def _ensure_stock_adjustment_account(self, company: frappe.model.document.Document) -> None:
+		if company.stock_adjustment_account:
+			return
+
+		stock_adj = frappe.db.get_value(
+			"Account",
+			{"company": company.name, "account_type": "Stock Adjustment", "is_group": 0},
+			"name",
+		)
+		if not stock_adj:
+			stock_adj = frappe.db.get_value(
+				"Account",
+				{"company": company.name, "root_type": "Expense", "is_group": 0},
+				"name",
+			)
+		if not stock_adj:
+			root_expense = frappe.db.get_value(
+				"Account",
+				{"company": company.name, "root_type": "Expense", "is_group": 1},
+				"name",
+			)
+			if not root_expense:
+				root_expense = (
+					frappe.get_doc(
+						{
+							"doctype": "Account",
+							"account_name": "Expenses",
+							"is_group": 1,
+							"root_type": "Expense",
+							"report_type": "Profit and Loss",
+							"company": company.name,
+						}
+					)
+					.insert(ignore_permissions=True)
+					.name
+				)
+			stock_adj = (
+				frappe.get_doc(
+					{
+						"doctype": "Account",
+						"account_name": "Stock Adjustment",
+						"parent_account": root_expense,
+						"account_type": "Stock Adjustment",
+						"company": company.name,
+					}
+				)
+				.insert(ignore_permissions=True)
+				.name
+			)
+		company.db_set("stock_adjustment_account", stock_adj)
+
+	def _ensure_cost_center(self, company: frappe.model.document.Document) -> None:
+		if company.cost_center:
+			return
+
+		root = frappe.db.get_value("Cost Center", {"company": company.name, "is_group": 1}, "name")
+		if not root:
+			root = (
+				frappe.get_doc(
+					{
+						"doctype": "Cost Center",
+						"cost_center_name": "All Cost Centers",
+						"is_group": 1,
+						"company": company.name,
+					}
+				)
+				.insert(ignore_permissions=True)
+				.name
+			)
+		leaf = frappe.db.get_value("Cost Center", {"company": company.name, "is_group": 0}, "name")
+		if not leaf:
+			leaf = (
+				frappe.get_doc(
+					{
+						"doctype": "Cost Center",
+						"cost_center_name": "Main",
+						"parent_cost_center": root,
+						"is_group": 0,
+						"company": company.name,
+					}
+				)
+				.insert(ignore_permissions=True)
+				.name
+			)
+		company.db_set("cost_center", leaf)
 
 	def _ensure_warehouse(self) -> None:
 		root = frappe.db.get_value("Warehouse", {"company": self.company, "is_group": 1}, "name")
