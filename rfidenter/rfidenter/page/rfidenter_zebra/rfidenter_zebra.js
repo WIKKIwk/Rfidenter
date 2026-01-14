@@ -940,15 +940,16 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 		function getBatchProduct() {
 			const raw = String(batchControl.product?.get_value?.() || "").trim();
 			if (raw) return raw;
-			const stored = String(window.localStorage.getItem(STORAGE_BATCH_PRODUCT) || "").trim();
-			if (stored && batchControl.product) batchControl.product.set_value(stored);
-			return stored;
+			return String(window.localStorage.getItem(STORAGE_BATCH_PRODUCT) || "").trim();
 		}
 
-		function setBatchProduct(value) {
+		function setBatchProduct(value, { fromControl = false } = {}) {
 			const v = String(value || "").trim();
 			window.localStorage.setItem(STORAGE_BATCH_PRODUCT, v);
-			if (batchControl.product) batchControl.product.set_value(v);
+			if (batchControl.product && !fromControl) {
+				const current = String(batchControl.product.get_value?.() || "").trim();
+				if (current !== v) batchControl.product.set_value(v);
+			}
 		}
 
 		function sanitizeZplText(value) {
@@ -1239,7 +1240,7 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 					options: "Item",
 					placeholder: "Mahsulot tanlang",
 					onchange: function () {
-						setBatchProduct(this.value);
+						setBatchProduct(this.value, { fromControl: true });
 					},
 				},
 				parent: $batchProductWrap,
