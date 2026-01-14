@@ -85,6 +85,32 @@ def _get_request_token() -> str:
 	return ""
 
 
+def _parse_api_token(raw: Any) -> tuple[str, str] | None:
+	s = str(raw or "").strip()
+	if not s:
+		return None
+	if s.lower().startswith("token "):
+		s = s[6:].strip()
+	if ":" not in s:
+		return None
+	api_key, api_secret = s.split(":", 1)
+	if not api_key or not api_secret:
+		return None
+	return api_key, api_secret
+
+
+def _user_from_api_token(raw: Any) -> str | None:
+	parsed = _parse_api_token(raw)
+	if not parsed:
+		return None
+	api_key, api_secret = parsed
+	user = frappe.db.get_value("User", {"api_key": api_key}, "name")
+	if not user:
+		return None
+	secret = get_decrypted_password("User", user, "api_secret", raise_exception=False) or ""
+	return user if secret == api_secret else None
+
+
 def _require_auth_for_ingest() -> None:
 	"""
 	Auth rules:
@@ -96,12 +122,20 @@ def _require_auth_for_ingest() -> None:
 	if frappe.session.user and frappe.session.user != "Guest":
 		return
 
-	token = _get_site_token()
-	if token:
-		req_token = _get_request_token()
-		if req_token != token:
-			frappe.throw("RFIDenter token noto‘g‘ri yoki yo‘q. Header: X-RFIDenter-Token", frappe.PermissionError)
+	auth_header = frappe.get_request_header("Authorization")
+	if auth_header and _user_from_api_token(auth_header):
 		return
+
+	req_token = _get_request_token()
+	if req_token:
+		site_token = _get_site_token()
+		if site_token and req_token == site_token:
+			return
+		if _user_from_api_token(req_token):
+			return
+		if site_token:
+			frappe.throw("RFIDenter token noto‘g‘ri yoki yo‘q. Header: X-RFIDenter-Token", frappe.PermissionError)
+			return
 
 	ip = getattr(frappe.local, "request_ip", None) or ""
 	ip = str(ip).strip()
