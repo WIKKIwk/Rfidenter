@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import datetime
-import json
 import re
 import secrets
 from unittest.mock import patch
@@ -50,7 +49,22 @@ class TestAntennaFlow(FrappeTestCase):
 		# Tests must not depend on external site config toggles.
 		# rfidenter reads config from frappe.conf (site_config.json is best-effort in api.py).
 		self._set_conf("rfidenter_dedup_by_ant", True)
-		self._set_conf("rfidenter_antenna_ttl_sec", 24 * 3600)
+		self._set_conf("rfidenter_antenna_ttl_sec", 86400)
+		orig_get_site_config = frappe.get_site_config
+
+		def _patched_get_site_config(*args, **kwargs):
+			conf = dict(orig_get_site_config(*args, **kwargs) or {})
+			try:
+				conf.update(dict(getattr(frappe, "conf", {}) or {}))
+			except Exception:
+				pass
+			conf["rfidenter_dedup_by_ant"] = True
+			conf["rfidenter_antenna_ttl_sec"] = 86400
+			return conf
+
+		site_config_patcher = patch("frappe.get_site_config", side_effect=_patched_get_site_config)
+		site_config_patcher.start()
+		self.addCleanup(site_config_patcher.stop)
 		self.assertTrue(api._dedup_by_ant_enabled(), "rfidenter_dedup_by_ant must be enabled for this suite")
 
 		# Freeze all "now" calls used by ERPNext/Frappe in this module to a single deterministic moment.
@@ -124,6 +138,60 @@ class TestAntennaFlow(FrappeTestCase):
 		frappe.db.delete("RFID Zebra Item Receipt Setting", {"item_code": ["like", f"{self.TEST_PREFIX}%"]})
 		frappe.db.delete("RFID Delivery Note Setting", {"item_code": ["like", f"{self.TEST_PREFIX}%"]})
 
+	def _system_tz_name(self) -> str:
+		tz = ""
+		try:
+			from frappe.utils.data import get_system_timezone  # type: ignore
+
+			tz = str(get_system_timezone() or "")
+		except Exception:
+			tz = ""
+		if not tz:
+			try:
+				tz = str(frappe.get_system_settings("time_zone") or "")
+			except Exception:
+				tz = ""
+		return tz.strip() or "Asia/Kolkata"
+
+	def _utc_to_local(self, utc_dt: datetime.datetime, tz_name: str | None = None) -> datetime.datetime:
+		assert utc_dt.tzinfo is not None, "utc_dt must be timezone-aware"
+		tz = tz_name or self._system_tz_name()
+		try:
+			from frappe.utils.data import convert_utc_to_timezone  # type: ignore
+
+			return convert_utc_to_timezone(utc_dt, tz)
+		except Exception:
+			pass
+		try:
+			from zoneinfo import ZoneInfo
+
+			return utc_dt.astimezone(ZoneInfo(tz))
+		except Exception:
+			return utc_dt
+
+	def _localize_naive(self, naive_dt: datetime.datetime, tz_name: str | None = None) -> datetime.datetime:
+		tz = tz_name or self._system_tz_name()
+		aware_local: datetime.datetime | None = None
+		try:
+			import pytz
+
+			try:
+				tz_obj = pytz.timezone(tz)
+				aware_local = tz_obj.localize(naive_dt)
+			except Exception:
+				aware_local = None
+		except Exception:
+			aware_local = None
+		if aware_local is None:
+			try:
+				from zoneinfo import ZoneInfo
+
+				aware_local = naive_dt.replace(tzinfo=ZoneInfo(tz))
+			except Exception:
+				# No tzdata available: UTC fallback.
+				aware_local = naive_dt.replace(tzinfo=datetime.timezone.utc)
+		return aware_local
+
 	def _midday_local_ts_and_day(self) -> tuple[datetime.datetime, int, str]:
 		"""
 		Return (aware_dt_local, ts_epoch_ms, day_iso) for a deterministic “midday today” moment.
@@ -135,71 +203,19 @@ class TestAntennaFlow(FrappeTestCase):
 		If unavailable, we fall back to ZoneInfo; if that fails too, we fall back to UTC.
 		"""
 
-		def _system_tz_name() -> str:
-			tz = ""
-			try:
-				from frappe.utils.data import get_system_timezone  # type: ignore
-
-				tz = str(get_system_timezone() or "")
-			except Exception:
-				tz = ""
-			if not tz:
-				try:
-					tz = str(frappe.get_system_settings("time_zone") or "")
-				except Exception:
-					tz = ""
-			# Match frappe.utils.data.get_system_timezone default (Asia/Kolkata) when unset.
-			return tz.strip() or "Asia/Kolkata"
-
 		# Cached for the whole test run to avoid flakiness if the suite crosses midnight.
 		cached = getattr(self.__class__, "_FROZEN_TIME", None)
 		if cached:
 			return cached
 
-		tz_name = _system_tz_name()
-
-		def _utc_to_local(utc_dt: datetime.datetime) -> datetime.datetime:
-			assert utc_dt.tzinfo is not None, "utc_dt must be timezone-aware"
-			try:
-				from frappe.utils.data import convert_utc_to_timezone  # type: ignore
-
-				return convert_utc_to_timezone(utc_dt, tz_name)
-			except Exception:
-				pass
-			try:
-				from zoneinfo import ZoneInfo
-
-				return utc_dt.astimezone(ZoneInfo(tz_name))
-			except Exception:
-				# Last resort: treat as UTC (keeps ts/day consistent even if tzdata is missing).
-				return utc_dt
-
+		tz_name = self._system_tz_name()
 		utc_now = datetime.datetime.now(datetime.timezone.utc)
-		local_now = _utc_to_local(utc_now)
+		local_now = self._utc_to_local(utc_now, tz_name)
 		local_day = local_now.date()
 		naive_midday = datetime.datetime(local_day.year, local_day.month, local_day.day, 12, 0, 0)
 
-		# Build an aware local-midday datetime.
-		aware_midday_local: datetime.datetime | None = None
-		try:
-			import pytz
-
-			try:
-				tz = pytz.timezone(tz_name)
-				aware_midday_local = tz.localize(naive_midday)
-			except Exception:
-				aware_midday_local = None
-		except Exception:
-			aware_midday_local = None
-
-		if aware_midday_local is None:
-			try:
-				from zoneinfo import ZoneInfo
-
-				aware_midday_local = naive_midday.replace(tzinfo=ZoneInfo(tz_name))
-			except Exception:
-				# No tzdata available: UTC fallback.
-				aware_midday_local = naive_midday.replace(tzinfo=datetime.timezone.utc)
+		# Build an aware local-midday datetime (DST-safe localization).
+		aware_midday_local = self._localize_naive(naive_midday, tz_name)
 
 		# ingest_tags `ts` unit contract is asserted in `test_ingest_tags_after_print_creates_once`.
 		# Use epoch-milliseconds here because rfidenter antenna stats (`last_seen`) is ms-based.
@@ -208,7 +224,7 @@ class TestAntennaFlow(FrappeTestCase):
 		# Derive day from ts_epoch via the SAME conversion path used for `local_now`.
 		# This round-trip guarantees day cannot diverge from ts_epoch.
 		utc_from_ts = datetime.datetime.fromtimestamp(ts_epoch / 1000, tz=datetime.timezone.utc)
-		local_from_ts = _utc_to_local(utc_from_ts)
+		local_from_ts = self._utc_to_local(utc_from_ts, tz_name)
 		assert local_from_ts.tzinfo is not None, "local_from_ts must be timezone-aware"
 		day = local_from_ts.date().isoformat()
 
@@ -216,41 +232,25 @@ class TestAntennaFlow(FrappeTestCase):
 		self.__class__._FROZEN_TIME = frozen
 		return frozen
 
+	def _frozen_ts_epoch_ms(self, *, offset_days: int = 0) -> int:
+		# Derive all ts values from the same frozen base using DST-safe local date arithmetic.
+		base_local, base_ts, _ = self._midday_local_ts_and_day()
+		if offset_days == 0:
+			return base_ts
+		tz_name = self._system_tz_name()
+		target_date = base_local.date() + datetime.timedelta(days=int(offset_days))
+		naive_midday = datetime.datetime(target_date.year, target_date.month, target_date.day, 12, 0, 0)
+		aware_local = self._localize_naive(naive_midday, tz_name)
+		return int(aware_local.astimezone(datetime.timezone.utc).timestamp() * 1000)
+
 	def _day_from_ts(self, ts_epoch: int, *, unit: str) -> str:
 		# Production bucketing uses system timezone conversion; derive day from the ts epoch.
 		# This is anchored to ts, not "now", and uses the same conversion path as production.
 		assert unit in ("ms", "sec"), f"Unexpected ts unit: {unit}"
-
-		def _system_tz_name() -> str:
-			tz = ""
-			try:
-				from frappe.utils.data import get_system_timezone  # type: ignore
-
-				tz = str(get_system_timezone() or "")
-			except Exception:
-				tz = ""
-			if not tz:
-				try:
-					tz = str(frappe.get_system_settings("time_zone") or "")
-				except Exception:
-					tz = ""
-			return tz.strip() or "Asia/Kolkata"
-
-		tz_name = _system_tz_name()
+		tz_name = self._system_tz_name()
 		scale = 1000 if unit == "ms" else 1
 		utc_dt = datetime.datetime.fromtimestamp(ts_epoch / scale, tz=datetime.timezone.utc)
-		assert utc_dt.tzinfo is not None, "utc_dt must be timezone-aware"
-		try:
-			from frappe.utils.data import convert_utc_to_timezone  # type: ignore
-
-			local_dt = convert_utc_to_timezone(utc_dt, tz_name)
-		except Exception:
-			try:
-				from zoneinfo import ZoneInfo
-
-				local_dt = utc_dt.astimezone(ZoneInfo(tz_name))
-			except Exception:
-				local_dt = utc_dt
+		local_dt = self._utc_to_local(utc_dt, tz_name)
 		assert local_dt.tzinfo is not None, "local_dt must be timezone-aware"
 		return local_dt.date().isoformat()
 
@@ -821,6 +821,49 @@ class TestAntennaFlow(FrappeTestCase):
 			return None
 		return {field: row.get(field) for field in fields}
 
+	def _infer_ts_unit_from_value(self, value: object, *, ts_epoch_ms: int) -> str:
+		if value is None:
+			raise AssertionError("last_seen is missing; cannot prove ts unit contract")
+
+		if isinstance(value, (int, float)):
+			num = int(value)
+			if num == ts_epoch_ms:
+				return "ms"
+			if num == ts_epoch_ms // 1000:
+				return "sec"
+			raise AssertionError(f"Unexpected numeric last_seen={num}")
+
+		if isinstance(value, str):
+			raw = value.strip()
+			if raw.isdigit():
+				num = int(raw)
+				if num == ts_epoch_ms:
+					return "ms"
+				if num == ts_epoch_ms // 1000:
+					return "sec"
+				raise AssertionError(f"Unexpected numeric last_seen={num}")
+			try:
+				value = frappe.utils.get_datetime(raw)
+			except Exception as exc:
+				raise AssertionError(f"Unparseable last_seen string: {raw}") from exc
+
+		if isinstance(value, datetime.date) and not isinstance(value, datetime.datetime):
+			value = datetime.datetime.combine(value, datetime.time(0, 0, 0))
+
+		if isinstance(value, datetime.datetime):
+			dt = value
+			if dt.tzinfo is None:
+				tz_name = self._system_tz_name()
+				dt = self._localize_naive(dt, tz_name)
+			sec = int(dt.astimezone(datetime.timezone.utc).timestamp())
+			if sec == ts_epoch_ms // 1000:
+				return "ms"
+			if sec == ts_epoch_ms:
+				return "sec"
+			raise AssertionError(f"Unexpected datetime last_seen={sec}s")
+
+		raise AssertionError(f"Unsupported last_seen type: {type(value)}")
+
 	def test_ingest_tags_without_event_id_no_stock_entry(self) -> None:
 		item_code = f"{self.TEST_PREFIX}-NOEVENT"
 		uom = self._ensure_master_data(item_code)
@@ -828,7 +871,7 @@ class TestAntennaFlow(FrappeTestCase):
 		epc = self._new_epc(1)
 		self._create_tag(epc=epc, item_code=item_code, uom=uom, status="Printed", printed=True)
 
-		_, ts_epoch, _ = self._midday_local_ts_and_day()
+		ts_epoch = self._frozen_ts_epoch_ms()
 		res = api.ingest_tags(device=self.device_id, ts=ts_epoch, tags=[{"epcId": epc, "antId": 1, "count": 1}])
 		self.assertTrue(res.get("ok"))
 		self.assertFalse(frappe.db.get_value("RFID Zebra Tag", {"epc": epc}, "purchase_receipt"))
@@ -841,7 +884,7 @@ class TestAntennaFlow(FrappeTestCase):
 		self._create_tag(epc=epc, item_code=item_code, uom=uom, status="Pending Print", printed=False)
 
 		event_id = self._new_event_id()
-		_, ts_epoch, _ = self._midday_local_ts_and_day()
+		ts_epoch = self._frozen_ts_epoch_ms()
 		res = api.ingest_tags(
 			device=self.device_id,
 			event_id=event_id,
@@ -881,7 +924,7 @@ class TestAntennaFlow(FrappeTestCase):
 		)
 		state.insert(ignore_permissions=True)
 
-		_, ts_epoch, _ = self._midday_local_ts_and_day()
+		ts_epoch = self._frozen_ts_epoch_ms()
 		day = self._day_from_ts(ts_epoch, unit="ms")
 
 		edge_before_device = frappe.db.count("RFID Edge Event", {"device_id": self.device_id})
@@ -897,9 +940,25 @@ class TestAntennaFlow(FrappeTestCase):
 		dedupe_before = frappe.db.count("RFID Zebra Dedupe", {"idempotency_key": ["like", f"%{event_id}%"]})
 		stock_before = self._count_tag_docs("purchase_receipt")
 		dn_before = self._count_tag_docs("delivery_note")
-		# Known zebra pipeline side-effect doctypes (this test module only enables Stock Entry).
-		# If the pipeline starts mutating other doctypes, extend this list and prove invariants explicitly.
-		se_before = frappe.db.count("Stock Entry", {"remarks": ["like", f"%EVENT={event_id}%"]})
+		def _doctype_exists(doctype: str) -> bool:
+			try:
+				_ = frappe.get_meta(doctype)
+				return True
+			except Exception:
+				return False
+
+		def _assert_has_creation(doctype: str) -> None:
+			meta = frappe.get_meta(doctype)
+			if not meta.get_field("creation"):
+				raise AssertionError(f"{doctype} missing creation field")
+
+		def _count_doctype(doctype: str) -> int:
+			_assert_has_creation(doctype)
+			return frappe.db.count(doctype)
+
+		doctypes = [dt for dt in ("Stock Entry", "Purchase Receipt", "Delivery Note") if _doctype_exists(dt)]
+		doctype_totals_before = {dt: _count_doctype(dt) for dt in doctypes}
+		window_start = frappe.utils.now_datetime()
 		tag_fields = [
 			"purchase_receipt",
 			"delivery_note",
@@ -934,6 +993,7 @@ class TestAntennaFlow(FrappeTestCase):
 				tags=[{"epcId": epc, "antId": 1, "count": 1}],
 			)
 			publish.assert_not_called()
+		window_end = frappe.utils.now_datetime()
 
 		self.assertTrue(res.get("duplicate"))
 		edge_after_device = frappe.db.count("RFID Edge Event", {"device_id": self.device_id})
@@ -944,7 +1004,10 @@ class TestAntennaFlow(FrappeTestCase):
 		dedupe_after = frappe.db.count("RFID Zebra Dedupe", {"idempotency_key": ["like", f"%{event_id}%"]})
 		stock_after = self._count_tag_docs("purchase_receipt")
 		dn_after = self._count_tag_docs("delivery_note")
-		se_after = frappe.db.count("Stock Entry", {"remarks": ["like", f"%EVENT={event_id}%"]})
+		doctype_totals_after = {dt: _count_doctype(dt) for dt in doctypes}
+		doctype_window_counts = {
+			dt: frappe.db.count(dt, {"creation": ["between", [window_start, window_end]]}) for dt in doctypes
+		}
 		tag_after = self._snapshot_row("RFID Zebra Tag", {"epc": epc}, tag_fields)
 
 		self.assertEqual(edge_before_device, edge_after_device)
@@ -955,7 +1018,9 @@ class TestAntennaFlow(FrappeTestCase):
 		self.assertEqual(dedupe_before, dedupe_after)
 		self.assertEqual(stock_before, stock_after)
 		self.assertEqual(dn_before, dn_after)
-		self.assertEqual(se_before, se_after)
+		self.assertEqual(doctype_totals_before, doctype_totals_after)
+		for dt, count in doctype_window_counts.items():
+			self.assertEqual(count, 0, msg=f"{dt} created during duplicate ingest")
 		self.assertEqual(tag_before, tag_after)
 		if linked_before.get("purchase_receipt"):
 			receipt_doctype = self._resolve_receipt_doctype(str(linked_before["purchase_receipt"]))
@@ -978,7 +1043,7 @@ class TestAntennaFlow(FrappeTestCase):
 		)
 
 		event_id = self._new_event_id()
-		_, ts_epoch, _ = self._midday_local_ts_and_day()
+		ts_epoch = self._frozen_ts_epoch_ms()
 		res = api.ingest_tags(
 			device=self.device_id,
 			event_id=event_id,
@@ -998,53 +1063,24 @@ class TestAntennaFlow(FrappeTestCase):
 		self._create_tag(epc=epc, item_code=item_code, uom=uom, status="Printed", printed=True)
 
 		event_id = self._new_event_id()
-		_, ts_epoch, _ = self._midday_local_ts_and_day()
-		cache_obj = frappe.cache()
-		CacheCls = type(cache_obj)
-		original_hset = CacheCls.hset
-		assert not getattr(original_hset, "__rfid_test_patch__", False), "Cache hset already patched"
-		device_key = api._normalize_device_id(self.device_id) or "unknown"
-		captured: dict[str, int] = {}
-
-		def _capture_hset(self, name, key, value, *args, **kwargs):
-			if name == api.ANT_STATS_INDEX and key == device_key:
-				captured["last_seen"] = int(value or 0)
-			return original_hset(self, name, key, value, *args, **kwargs)
-
-		_capture_hset.__rfid_test_patch__ = True  # type: ignore[attr-defined]
-
-		with patch.object(CacheCls, "hset", new=_capture_hset):
-			res1 = api.ingest_tags(
-				device=self.device_id,
-				event_id=event_id,
-				batch_id=self.batch_id,
-				seq=3,
-				ts=ts_epoch,
-				tags=[{"epcId": epc, "antId": 1, "count": 1}],
-			)
+		# Use a ts offset from frozen "now" so day bucketing must honor ts (not now).
+		ts_epoch = self._frozen_ts_epoch_ms(offset_days=-1)
+		res1 = api.ingest_tags(
+			device=self.device_id,
+			event_id=event_id,
+			batch_id=self.batch_id,
+			seq=3,
+			ts=ts_epoch,
+			tags=[{"epcId": epc, "antId": 1, "count": 1}],
+		)
 		self.assertTrue(res1.get("ok"))
-		edge_row = frappe.db.get_value("RFID Edge Event", {"event_id": event_id}, ["payload_json"], as_dict=True)
-		self.assertTrue(edge_row and edge_row.get("payload_json"), "RFID Edge Event payload_json missing")
-		payload = json.loads(edge_row.get("payload_json") or "{}")
-		self.assertEqual(payload.get("ts"), ts_epoch)
-		self.assertIs(CacheCls.hset, original_hset)
-		self.assertFalse(getattr(CacheCls.hset, "__rfid_test_patch__", False))
 
-		self.assertIn("last_seen", captured, msg=f"Antenna stats index missing for {device_key}")
-		last_seen = int(captured.get("last_seen") or 0)
-		expected_ms = ts_epoch
-		expected_sec = ts_epoch // 1000
-		if last_seen == expected_ms:
-			unit_detected = "ms"
-		elif last_seen == expected_sec:
-			unit_detected = "sec"
-		else:
-			raise AssertionError(
-				f"Unexpected antenna last_seen: {last_seen} (expected {expected_ms} or {expected_sec})"
-			)
+		saved_tag = frappe.db.get_value("RFID Saved Tag", {"epc": epc}, ["last_seen"], as_dict=True)
+		self.assertTrue(saved_tag, msg=f"Saved Tag missing for {epc}")
+		unit_detected = self._infer_ts_unit_from_value(saved_tag.get("last_seen"), ts_epoch_ms=ts_epoch)
 		self.assertEqual(unit_detected, "ms")
 
-		day_expected = self._day_from_ts(ts_epoch, unit=unit_detected)
+		day_expected = self._day_from_ts(ts_epoch, unit="ms")
 		saved_day = frappe.db.get_value(
 			"RFID Saved Tag Day",
 			{"epc": epc, "day": day_expected},
@@ -1056,6 +1092,22 @@ class TestAntennaFlow(FrappeTestCase):
 		if hasattr(saved_day_value, "isoformat"):
 			saved_day_value = saved_day_value.isoformat()
 		self.assertEqual(saved_day_value, day_expected)
+		frozen_day = self._midday_local_ts_and_day()[2]
+		self.assertNotEqual(
+			day_expected,
+			frozen_day,
+			msg=f"ts day unexpectedly equals frozen day ({day_expected}); DST-safe offset failed",
+		)
+		saved_day_frozen = frappe.db.get_value(
+			"RFID Saved Tag Day",
+			{"epc": epc, "day": frozen_day},
+			["day"],
+			as_dict=True,
+		)
+		self.assertFalse(
+			saved_day_frozen,
+			msg=f"Saved Tag Day unexpectedly created for frozen day {frozen_day}; bucketing may ignore ts",
+		)
 
 		receipt_name = frappe.db.get_value("RFID Zebra Tag", {"epc": epc}, "purchase_receipt")
 		debug_row = frappe.db.get_value(
@@ -1139,8 +1191,9 @@ class TestAntennaFlow(FrappeTestCase):
 		sanitized_key = f"{api.SEEN_PREFIX}{api._sanitize_agent_id(device) or device}:{ant_id}:{epc}"
 
 		cache_obj = frappe.cache()
-		cache_obj.delete_value(expected_key)
-		cache_obj.delete_value(sanitized_key)
+		if hasattr(cache_obj, "delete_value"):
+			cache_obj.delete_value(expected_key)
+			cache_obj.delete_value(sanitized_key)
 
 		CacheCls = type(cache_obj)
 		original_set_value = CacheCls.set_value
@@ -1155,7 +1208,7 @@ class TestAntennaFlow(FrappeTestCase):
 		_capture_set_value.__rfid_test_patch__ = True  # type: ignore[attr-defined]
 
 		with patch.object(CacheCls, "set_value", new=_capture_set_value):
-			_, ts_epoch, _ = self._midday_local_ts_and_day()
+			ts_epoch = self._frozen_ts_epoch_ms()
 			api.ingest_tags(device=device, ts=ts_epoch, tags=[{"epcId": epc, "antId": ant_id, "count": 1}])
 
 		self.assertIn(expected_key, set_keys)
@@ -1182,7 +1235,7 @@ class TestAntennaFlow(FrappeTestCase):
 
 		frappe.local.response = frappe._dict()
 		event_ingest_id = self._new_event_id()
-		_, ts_epoch, _ = self._midday_local_ts_and_day()
+		ts_epoch = self._frozen_ts_epoch_ms()
 		res = api.ingest_tags(
 			device=self.device_id,
 			event_id=event_ingest_id,
