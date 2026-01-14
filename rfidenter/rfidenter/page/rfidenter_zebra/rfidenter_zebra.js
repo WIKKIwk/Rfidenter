@@ -1234,9 +1234,13 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 				df: {
 					label: "Product",
 					description: "",
+					fieldname: "batch_product",
 					fieldtype: "Link",
 					options: "Item",
 					placeholder: "Mahsulot tanlang",
+					onchange: function () {
+						setBatchProduct(this.value);
+					},
 				},
 				parent: $batchProductWrap,
 				render_input: true,
@@ -1245,9 +1249,6 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 			batchControl.product.toggle_label(false);
 			const saved = getBatchProduct();
 			if (saved) batchControl.product.set_value(saved);
-			batchControl.product.$input?.on("change", () => {
-				setBatchProduct(batchControl.product.get_value());
-			});
 		}
 
 		async function ensureItemControls() {
@@ -1456,9 +1457,10 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 		$batchStart.prop("disabled", disabled);
 		$batchStop.prop("disabled", disabled);
 		$batchSwitch.prop("disabled", disabled);
-		$batchDevice.prop("disabled", disabled);
-		$batchId.prop("disabled", disabled);
-		batchControl.product?.$input?.prop("disabled", disabled);
+		const inputsDisabled = !enabled;
+		$batchDevice.prop("disabled", inputsDisabled);
+		$batchId.prop("disabled", inputsDisabled);
+		batchControl.product?.$input?.prop("disabled", inputsDisabled);
 	}
 
 		function syncDeviceIdFromAgent() {
