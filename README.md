@@ -1,176 +1,220 @@
-# RFIDENTER
-# ======================================================================
-# ERPNext app for RFID ingest, Zebra workflows, and real time dashboards.
+# Overview
+RFIDenter — ERPNext ichidagi zavod ish oqimini boshqaruvchi modul. U Edge mini-PC orqali tarozi oqimini qabul qiladi, stabil vaznni FSM + fast/slow filtrlash bilan aniqlaydi, batch rejimida Zebra bosishni (va ixtiyoriy RFID encode) ishga tushiradi, hamda ERPNextga ishonchli (idempotent) tarzda yozadi. Tizim SQLite outbox va idempotency orqali restart, tarmoq uzilishi va printer kechikishlarida ham double-print yoki ERP dublikatini oldini oladi.
 
-## >>> What This Is
-RFIDenter is a custom ERPNext app that receives RFID tag reads, stores
-and aggregates them, and exposes real time dashboards for operators. It
-also connects to the local Zebra RFID printer workflow and can auto
-submit stock entries when tags are read.
+# Who this is for
+- Zavod operatorlari (batch bosishni ishga tushirish, to'xtatish, scan/reweigh holatlarini kuzatish).
+- IT/OT adminlar (deploy, konfiguratsiya, monitoring, rollback).
+- ERPNext administratorlari (integratsiya, ruxsatlar, autentifikatsiya).
 
-This README is written for non-developers. You can follow it step by
-step without knowing how to code.
+# Safety invariants (must never be violated)
+- Hech qachon double-print bo'lmasin (1 placement = 1 label).
+- Hech qachon ERP dublikat yozuv bo'lmasin (idempotency majburiy).
+- Removal gating majburiy: keyingi bosishga o'tishdan oldin vazn EMPTY holatga qaytishi kerak.
+- Post-guard majburiy: lockdan keyin vazn o'zgarsa, oqim bloklanadi va reweigh talab qilinadi.
+- Printer COMPLETED tasdiqlanmaguncha ERPga "printed" event yuborilmasin.
 
-## >>> Who This Is For
-- Operators who need a simple dashboard for RFID reads.
-- IT admins who must connect RFID hardware with ERPNext.
-- Warehouse teams using Zebra RFID printers and UHF readers.
+# Architecture
+## Components
+- ERPNext + RFIDenter (server): control-plane, event log, batch state, UI.
+- Edge service (mini-PC): scale reader + FSM + outbox + printer transport.
+- Zebra printer (TCP/CUPS/driver) va ixtiyoriy RFID encode.
+- Scale (USB HID/Serial).
 
-## >>> Key Features
-- Real time ingest of tag reads from local RFID services.
-- Auto de-duplication per EPC and antenna.
-- Live dashboards and historical storage.
-- Zebra RFID print flow with Stock Entry integration.
-- Optional scale (tarozi) realtime weight updates.
-- Token based access control for secure ingest.
+## Data flow
+1) Operator UI orqali batch start qiladi.
+2) Edge scale oqimini o'qiydi -> stable lock -> print/encode.
+3) Printer COMPLETED tasdiqlansa -> ERPNextga event_report yuboriladi.
+4) ERPNext eventni idempotent qabul qiladi va batch state yangilanadi.
+5) Removal gating va post-guard shartlari bajarilganda keyingi cycle boshlanadi.
 
-## >>> Architecture Overview
+## State machine (FSM) summary
+- WAIT_EMPTY -> LOADING -> SETTLING -> LOCKED -> PRINTING -> POST_GUARD -> WAIT_EMPTY.
+- LOCKED dan keyin vazn o'zgarsa: PAUSED(REWEIGH_REQUIRED).
+- Printer offline/paused/error: PAUSED(PRINTER_*).
+- RFID unknown bo'lsa: ScanReconRequired (external scan recon kerak).
 
-```
-   UHF Reader / Local Agent
-            |
-            |  HTTP POST (ingest tags)
-            v
-      ERPNext (RFIDenter)
-            |
-            |  Real time events
-            v
-      ERPNext UI Dashboards
+## Idempotency & outbox model
+- Edge tarafda SQLite outbox: print + ERP eventlar navbatda saqlanadi.
+- event_id va (device_id, batch_id, seq) UNIQUE bo'lishi shart.
+- Restartdan keyin outbox qayta ishlanadi va duplicate yaratmaydi.
 
-   Zebra Bridge (local) <--> Zebra Printer
-            |
-            |  HTTP / ERP agent
-            v
-      ERPNext (RFIDenter)
-```
+# Requirements
+## Hardware
+- Edge mini-PC: <TODO: minimal CPU/RAM/SSD>.
+- Scale: <TODO: HID/Serial modeli>.
+- Zebra printer: <TODO: model va ulanish turi>.
 
-## >>> Quick Start (ERPNext Bench)
-1) Install the app on your site:
+## Software
+- ERPNext: <TODO: version>.
+- Edge runtime: <TODO: .NET 8/Java/Node/etc>.
+- OS: <TODO: distro va minimal versiya>.
 
-```
-bench --site <your-site> install-app rfidenter
-```
+## Network & firewall
+- ERPNext host: <TODO: host:port>.
+- Printer host: <TODO: host:port>.
+- Edge outbound: ERPNext API, printer endpoint.
 
-2) Run migrations (safe to run multiple times):
+## Access & security
+- ERPNext foydalanuvchi rol(i): RFIDer va kerak bo'lsa System Manager.
+- Tokenlar: site token (server config) va user token (browser-local) farqli.
 
-```
-bench --site <your-site> migrate
-```
+# Quick start (10 minutes)
+1) ERPNext appni o'rnating.
+   Kutiladigan natija: RFIDenter app ERPNextga install bo'ladi.
+   TODO: <install command>
 
-3) Start or restart bench:
+2) Migrate/upgrade qiling.
+   Kutiladigan natija: DocType va migratsiyalar qo'llanadi.
+   TODO: <migrate command>
 
-```
-bench start
-```
+3) ERPNext restart.
+   Kutiladigan natija: yangi UI sahifalari ko'rinadi.
+   TODO: <restart command>
 
-4) Open the UI:
-- RFIDenter main page: /app/rfidenter
-- RFIDenter Zebra page: /app/rfidenter-zebra
-- RFIDenter Antenna list: /app/rfidenter-antenna
+4) UIga kiring: <ERP_BASE_URL>/app/rfidenter-settings.
+   Kutiladigan natija: Token/Agent/Zebra status panel chiqadi.
 
-## >>> After Pulling Updates (Important)
-If you update the app from GitHub and the UI changes do not appear:
+5) User token yarating (Settings sahifasida).
+   Kutiladigan natija: User Token (browser-local) qiymati paydo bo'ladi.
 
-1) Build assets:
-```
-bench build --app rfidenter
-```
+6) Site token holatini tekshiring.
+   Kutiladigan natija: Site Token (server effective) masked ko'rinadi yoki "not set".
 
-2) Clear cache:
-```
-bench --site <your-site> clear-cache
-```
+7) Edge service ishga tushiring.
+   Kutiladigan natija: device_status/heartbeat yangilanadi.
+   TODO: <edge start command>
 
-3) Restart bench:
-```
-bench restart
-```
+8) Zebra printer test bosish.
+   Kutiladigan natija: test label bosiladi va UIda status ok.
+   TODO: <print test command>
 
-4) Hard refresh the browser (Ctrl+Shift+R).
+9) Batch start va stabil vazn bilan bosish.
+   Kutiladigan natija: 1 placement = 1 label, ERP event log yoziladi.
 
-## >>> Configuration (Site Config)
-Edit your site config file:
-```
-<bench>/sites/<your-site>/site_config.json
-```
+# Configuration reference (every env var)
+Quyidagi qiymatlar inventarizatsiyasi. Unknown bo'lsa TODO bilan belgilangan.
 
-Example configuration:
-```
-{
-  "rfidenter_token": "YOUR_SHARED_SECRET",
-  "rfidenter_agent_ttl_sec": 60,
-  "rfidenter_dedup_by_ant": true,
-  "rfidenter_dedup_ttl_sec": 86400,
-  "rfidenter_scale_ttl_sec": 300
-}
-```
+## ERP site_config.json keys
+- rfidenter_token
+  - Ma'no: ingest endpoint himoyasi.
+  - Default: "" (bo'sh).
+  - Validatsiya: bo'sh bo'lmasa string.
+  - Xato simptomi: Guest ingest ruxsat xatosi yoki loopback-only.
 
-Notes:
-- rfidenter_token protects the ingest endpoint from unauthorized use.
-- rfidenter_dedup_by_ant reduces duplicate reads per antenna.
+- rfidenter_agent_ttl_sec
+  - Ma'no: agent online TTL.
+  - Default: 60.
+  - Xato simptomi: agent offline ko'rinishi tez-tez o'chib-yonishi.
 
-## >>> RFID Tag Ingest API
-Endpoint:
-```
-POST /api/method/rfidenter.rfidenter.api.ingest_tags
-```
+- rfidenter_dedup_by_ant
+  - Ma'no: antenna bo'yicha dedup.
+  - Default: True.
+  - Xato simptomi: bir EPC ko'p qayta sanalishi.
 
-Headers (recommended):
-```
-Authorization: token <api_key>:<api_secret>
-X-RFIDenter-Token: <rfidenter_token>
-```
+- rfidenter_dedup_ttl_sec
+  - Ma'no: dedup TTL (sekund).
+  - Default: 86400.
+  - Xato simptomi: eski EPC qayta kirib kelishi.
 
-Body example:
-```
-{
-  "device": "reader-01",
-  "tags": [
-    { "epcId": "3034257BF7194E4000000001", "antId": 1, "rssi": 68 },
-    { "epcId": "3034257BF7194E4000000002", "antId": 2, "rssi": 72 }
-  ],
-  "ts": 1730000000000
-}
-```
+- rfidenter_antenna_ttl_sec
+  - Ma'no: antenna statistik TTL (sekund).
+  - Default: 600.
+  - Xato simptomi: UIda antenna holati tez yo'qolishi.
 
-## >>> Zebra RFID Print Workflow
-- Printing a tag creates a Stock Entry in Draft state.
-- Stock Entry type is Material Issue (not Material Receipt).
-- When UHF reader reads the tag later, RFIDenter auto-submits that Stock Entry.
+- rfidenter_scale_ttl_sec
+  - Ma'no: scale cache TTL (sekund).
+  - Default: 300.
+  - Xato simptomi: scale qiymati tez yo'qolishi.
 
-This lets operators print first, and finalize stock movement only after
-physical verification.
+- rfidenter_rpc_timeout_sec
+  - Ma'no: agent RPC timeout.
+  - Default: 30.
+  - Xato simptomi: agent javob bermaydi/timeout.
 
-## >>> Scale (Tarozi) Integration
-If you use a USB scale with the Zebra bridge:
-- The Zebra bridge reads weight and pushes it to ERPNext.
-- RFIDenter shows the live weight and can auto-fill Qty and UOM.
+## Edge service env/config (TODO)
+- TODO: <edge env var list, default, validation, failure symptom>
 
-ERP endpoints:
-```
-POST /api/method/rfidenter.rfidenter.api.ingest_scale_weight
-GET  /api/method/rfidenter.rfidenter.api.get_scale_weight
-```
+# Deployment
+## Docker Compose
+N/A (TODO: agar compose mavjud bo'lsa file nomi va run steps).
 
-## >>> Security Notes
-- Always set rfidenter_token in site_config.json.
-- Use ERPNext API keys for production environments.
-- Do not expose local Zebra services directly to the internet.
+## systemd
+N/A (TODO: agar systemd unit mavjud bo'lsa unit nomi va run steps).
 
-## >>> Troubleshooting
-1) No tags appear in the UI:
-   - Confirm the ingest API is reachable.
-   - Verify rfidenter_token matches the sender header.
+# Operations runbook (operators)
+## Daily workflow
+1) Settings sahifasida tokenlar holatini tekshiring.
+   Kutiladigan natija: User Token bor, Site Token holati ko'rinadi.
+2) Zebra sahifasida batch start qiling.
+   Kutiladigan natija: Batch state Running.
+3) Tarozi ustiga mahsulot qo'ying, stabil bo'lganda label bosiladi.
+   Kutiladigan natija: 1 placement = 1 label.
+4) Mahsulotni olib tashlang (EMPTY holatga qaytsin).
+   Kutiladigan natija: keyingi bosish tayyor.
 
-2) Zebra items do not submit:
-   - Make sure the UHF reader is sending tag reads into ingest_tags.
+## Do/Don’t
+- Do: EMPTY holatga qaytishini kuting.
+- Do: PRINTER_PAUSED/ERROR/SCAN_REQUIRED holatlarida operator aralashuvi.
+- Don't: bir placementda bir necha bosish.
+- Don't: ERP eventlarini qo'lda qayta yuborish.
 
-3) Scale weight does not update:
-   - Check Zebra bridge port settings.
-   - Confirm scale is sending data over serial.
+## Stop conditions (when to halt production)
+- Printer ERROR yoki OFFLINE bo'lsa.
+- Reweigh required holati takrorlansa.
+- ERP auth xatosi ketma-ket bo'lsa.
 
-4) Permission errors:
-   - Ensure your ERP user has the RFIDer role.
+# Monitoring & logging
+- ERPNext log: <TODO: path/command>.
+- Edge log: <TODO: path/command>.
+- Key metrics: outbox depth, printer status, last_event_seq, batch state.
 
-## >>> License
-Apache License 2.0. See LICENSE and license.txt.
+# Backup, restore, rollback
+1) ERP backup:
+   Kutiladigan natija: database + files snapshot olinadi.
+   TODO: <backup command>
+2) SQLite outbox backup:
+   Kutiladigan natija: outbox fayli xavfsiz ko'chiriladi.
+   TODO: <outbox path + copy command>
+3) Restore:
+   Kutiladigan natija: ERP va outbox bir xil nuqtaga qaytadi.
+   TODO: <restore steps>
+4) Rollback:
+   Kutiladigan natija: oldingi versiya ishga tushadi.
+   TODO: <rollback steps>
+
+# Troubleshooting (symptom → cause → verify → fix)
+- Symptom: Site token "not authorized".
+  Cause: System Manager roli yo'q.
+  Verify: ERP user role list.
+  Fix: System Manager rolini qo'shing.
+
+- Symptom: "unavailable".
+  Cause: tarmoq offline yoki serverga ulanish yo'q.
+  Verify: ping/healthcheck.
+  Fix: tarmoqni tiklang.
+
+- Symptom: double print.
+  Cause: removal gating buzilgan yoki FSM state noto'g'ri.
+  Verify: Edge log va FSM state.
+  Fix: Edge service config va thresholdsni tekshiring.
+
+- Symptom: ERP duplicate.
+  Cause: idempotency yoki outbox muammosi.
+  Verify: event_id va seq uniqueness.
+  Fix: outbox DB va ERP log tekshiruvi.
+
+# FAQ
+- Site token va user token farqi nima?
+  Site token — server config; User token — browser-local. Ikkalasi alohida.
+
+- Qachon scan recon talab qilinadi?
+  RFID unknown bo'lsa; operator tashqi recon qiladi.
+
+# Appendix
+## Common commands
+- ERP migrate: <TODO>
+- ERP restart: <TODO>
+- Edge start/stop: <TODO>
+
+## Example .env (redacted)
+TODO: <env template with redacted secrets>
