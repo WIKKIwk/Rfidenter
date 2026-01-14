@@ -130,8 +130,12 @@ frappe.pages["rfidenter-settings"].on_page_load = function (wrapper) {
 						<span class="rfidenter-muted rfidenter-token-status"></span>
 					</div>
 					<div class="rfidenter-info-row">
-						<span class="rfidenter-label">Authorization</span>
-						<code class="rfidenter-auth-line">--</code>
+						<span class="rfidenter-label">User Token (browser-local)</span>
+						<code class="rfidenter-user-token">--</code>
+					</div>
+					<div class="rfidenter-info-row">
+						<span class="rfidenter-label">Site Token (server config, effective)</span>
+						<code class="rfidenter-site-token">--</code>
 					</div>
 				</div>
 			</div>
@@ -169,7 +173,8 @@ frappe.pages["rfidenter-settings"].on_page_load = function (wrapper) {
 	const $zebraOpen = $body.find(".rfidenter-zebra-open");
 	const $zebraStatus = $body.find(".rfidenter-zebra-status");
 	const $tokenStatus = $body.find(".rfidenter-token-status");
-	const $tokenLine = $body.find(".rfidenter-auth-line");
+	const $userTokenLine = $body.find(".rfidenter-user-token");
+	const $siteTokenLine = $body.find(".rfidenter-site-token");
 	const $tokenBtn = $body.find(".rfidenter-token-generate");
 
 	const state = {
@@ -182,9 +187,29 @@ frappe.pages["rfidenter-settings"].on_page_load = function (wrapper) {
 		return String(window.localStorage.getItem(STORAGE_AUTH) || "").trim();
 	}
 
-	function renderToken(auth) {
+	function renderUserToken(auth) {
 		const value = String(auth || "").trim();
-		setText($tokenLine, value || "--");
+		setText($userTokenLine, value || "not set");
+	}
+
+	async function refreshSiteTokenStatus({ quiet = false } = {}) {
+		try {
+			const r = await frappe.call("rfidenter.rfidenter.api.get_site_token_status");
+			const msg = r?.message;
+			if (!msg || msg.ok !== true) throw new Error("Token status olinmadi");
+			if (!msg.has_site_token) {
+				setText($siteTokenLine, "not set");
+				return;
+			}
+			const source = String(msg.source || "").trim() || "default";
+			const masked = String(msg.masked || "").trim();
+			setText($siteTokenLine, masked ? `${masked} (source: ${source})` : `not set (source: ${source})`);
+		} catch (e) {
+			setText($siteTokenLine, "not authorized");
+			if (!quiet) {
+				frappe.show_alert({ message: `Site token: ${escapeHtml(e?.message || e)}`, indicator: "orange" });
+			}
+		}
 	}
 
 	function getZebraBaseUrl() {
@@ -346,9 +371,10 @@ frappe.pages["rfidenter-settings"].on_page_load = function (wrapper) {
 			if (!r || !r.message || r.message.ok !== true) throw new Error("Token yaratilmadi");
 			const auth = String(r.message.authorization || "").trim();
 			if (auth) window.localStorage.setItem(STORAGE_AUTH, auth);
-			renderToken(auth);
+			renderUserToken(auth);
 			$tokenStatus.text("Tayyor");
 			window.setTimeout(() => setText($tokenStatus, ""), 2500);
+			refreshSiteTokenStatus({ quiet: true });
 		} catch (e) {
 			$tokenStatus.text("");
 			frappe.msgprint({
@@ -534,7 +560,8 @@ frappe.pages["rfidenter-settings"].on_page_load = function (wrapper) {
 	});
 	initZebraUi();
 	renderDevices();
-	renderToken(getStoredAuth());
+	renderUserToken(getStoredAuth());
+	refreshSiteTokenStatus({ quiet: true });
 	refreshZebra({ quiet: true });
 	refreshAgents();
 };
