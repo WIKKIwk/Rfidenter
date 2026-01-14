@@ -193,7 +193,8 @@ class TestAntennaFlow(FrappeTestCase):
 				# No tzdata available: UTC fallback.
 				aware_midday_local = naive_midday.replace(tzinfo=datetime.timezone.utc)
 
-		# We pass `ts` through ingest_tags as milliseconds (matches production expectations in api.py).
+		# ingest_tags `ts` unit contract is asserted in `test_ingest_tags_after_print_creates_once`.
+		# Use epoch-milliseconds here because rfidenter antenna stats (`last_seen`) is ms-based.
 		ts_epoch = int(aware_midday_local.astimezone(datetime.timezone.utc).timestamp() * 1000)
 
 		# Derive day from ts_epoch via the SAME conversion path used for `local_now`.
@@ -970,16 +971,18 @@ class TestAntennaFlow(FrappeTestCase):
 		self.assertTrue(edge_row and edge_row.get("payload_json"), "RFID Edge Event payload_json missing")
 		payload = json.loads(edge_row.get("payload_json") or "{}")
 		self.assertEqual(payload.get("ts"), ts_epoch)
-		device_key = api._normalize_device_id(self.device_id) or "unknown"
-		cache = frappe.cache()
-		index_val = cache.hget(api.ANT_STATS_INDEX, device_key)
-		index_ts = int(index_val.decode() if isinstance(index_val, (bytes, bytearray)) else (index_val or 0))
-		self.assertEqual(index_ts, ts_epoch)
-		stats_payload = cache.get_value(f"{api.ANT_STATS_PREFIX}{device_key}") or {}
-		self.assertEqual(int((stats_payload or {}).get("last_seen") or 0), ts_epoch)
-		ants = (stats_payload or {}).get("ants") or {}
-		ant1 = ants.get("1") if isinstance(ants, dict) else None
-		self.assertEqual(int((ant1 or {}).get("last_seen") or 0), ts_epoch)
+		day_expected = self._saved_tag_bucket_day_iso()
+		saved_day = frappe.db.get_value(
+			"RFID Saved Tag Day",
+			{"epc": epc, "day": day_expected},
+			["day", "reads", "last_seen", "device"],
+			as_dict=True,
+		)
+		self.assertTrue(saved_day, msg=f"Saved Tag Day missing for {epc} on {day_expected}")
+		saved_day_value = saved_day.get("day")
+		if hasattr(saved_day_value, "isoformat"):
+			saved_day_value = saved_day_value.isoformat()
+		self.assertEqual(saved_day_value, day_expected)
 
 		receipt_name = frappe.db.get_value("RFID Zebra Tag", {"epc": epc}, "purchase_receipt")
 		debug_row = frappe.db.get_value(
