@@ -193,10 +193,19 @@ frappe.pages["rfidenter-settings"].on_page_load = function (wrapper) {
 	}
 
 	async function refreshSiteTokenStatus({ quiet = false } = {}) {
+		const hasSystemManager =
+			frappe.session?.user === "Administrator" || (frappe.user && frappe.user.has_role("System Manager"));
+		if (!hasSystemManager) {
+			setText($siteTokenLine, "not authorized (System Manager only)");
+			return;
+		}
 		try {
 			const r = await frappe.call("rfidenter.rfidenter.api.get_site_token_status");
 			const msg = r?.message;
 			if (!msg || msg.ok !== true) throw new Error("Token status olinmadi");
+			if (typeof msg.has_site_token !== "boolean" || typeof msg.source !== "string") {
+				throw new Error("Token status noto‘g‘ri");
+			}
 			if (!msg.has_site_token) {
 				setText($siteTokenLine, "not set");
 				return;
@@ -205,8 +214,15 @@ frappe.pages["rfidenter-settings"].on_page_load = function (wrapper) {
 			const masked = String(msg.masked || "").trim();
 			setText($siteTokenLine, masked ? `${masked} (source: ${source})` : `not set (source: ${source})`);
 		} catch (e) {
-			setText($siteTokenLine, "not authorized");
-			if (!quiet) {
+			const excType = String(e?.exc_type || e?.exc || "").trim();
+			const message = String(e?.message || e || "").trim();
+			const isPermission = excType === "PermissionError" || message.toLowerCase().includes("permission");
+			if (isPermission) {
+				setText($siteTokenLine, "not authorized");
+			} else if (!$siteTokenLine.text()) {
+				setText($siteTokenLine, "error/unavailable");
+			}
+			if (!quiet && !isPermission) {
 				frappe.show_alert({ message: `Site token: ${escapeHtml(e?.message || e)}`, indicator: "orange" });
 			}
 		}
@@ -564,4 +580,9 @@ frappe.pages["rfidenter-settings"].on_page_load = function (wrapper) {
 	refreshSiteTokenStatus({ quiet: true });
 	refreshZebra({ quiet: true });
 	refreshAgents();
+
+	window.addEventListener("focus", () => refreshSiteTokenStatus({ quiet: true }));
+	document.addEventListener("visibilitychange", () => {
+		if (!document.hidden) refreshSiteTokenStatus({ quiet: true });
+	});
 };
