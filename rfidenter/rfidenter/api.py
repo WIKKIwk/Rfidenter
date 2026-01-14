@@ -41,6 +41,42 @@ def _get_site_token() -> str:
 	return token
 
 
+@frappe.whitelist()
+def get_site_token_status() -> dict[str, Any]:
+	if frappe.session.user != "Administrator" and not frappe.has_role("System Manager"):
+		frappe.throw("RFIDenter: ruxsat yo‘q.", frappe.PermissionError)
+
+	conf = getattr(frappe, "conf", None) or {}
+	source = "default"
+	token = ""
+	if isinstance(conf, dict) and "rfidenter_token" in conf:
+		token = conf.get("rfidenter_token") or ""
+		source = "frappe.conf"
+	else:
+		site_conf = frappe.get_site_config() or {}
+		if isinstance(site_conf, dict) and "rfidenter_token" in site_conf:
+			token = site_conf.get("rfidenter_token") or ""
+			source = "site_config"
+
+	token = str(token or "").strip()
+	has_token = bool(token)
+	if not token:
+		masked = ""
+	elif len(token) >= 9:
+		masked = f"{token[:4]}…{token[-4:]}"
+	elif len(token) == 1:
+		masked = "…"
+	else:
+		masked = f"{token[0]}…"
+
+	return {
+		"ok": True,
+		"has_site_token": has_token,
+		"source": source,
+		"masked": masked,
+	}
+
+
 def _get_request_token() -> str:
 	for key in ("X-RFIDenter-Token", "X-RFIDENTER-TOKEN", "X-RFIDENTER-TOKEN"):
 		v = frappe.get_request_header(key)
