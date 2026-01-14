@@ -22,6 +22,7 @@ class TestAntennaFlow(FrappeTestCase):
 	DEVICE_ID = ""
 	BATCH_ID = ""
 	_FROZEN_TIME: tuple[datetime.datetime, int, str] | None = None
+	_CONF_MISSING = object()
 
 	@classmethod
 	def setUpClass(cls) -> None:
@@ -77,6 +78,10 @@ class TestAntennaFlow(FrappeTestCase):
 			patcher.start()
 			self.addCleanup(patcher.stop)
 
+		# Ensure request-local cache exists so cache-backed antenna stats are deterministic even without Redis.
+		if not hasattr(frappe.local, "cache") or frappe.local.cache is None:
+			frappe.local.cache = {}
+
 		self._ensure_company()
 		self._ensure_accounts()
 		self._ensure_cost_centers()
@@ -88,11 +93,14 @@ class TestAntennaFlow(FrappeTestCase):
 		self._cleanup_test_data()
 
 	def _set_conf(self, key: str, value: object) -> None:
-		prev = frappe.conf.get(key) if hasattr(frappe, "conf") else None
+		if not hasattr(frappe, "conf"):
+			raise AssertionError("frappe.conf missing; cannot set config in tests")
+		sentinel = self._CONF_MISSING
+		prev = frappe.conf.get(key, sentinel)
 		frappe.conf[key] = value
 
 		def _restore() -> None:
-			if prev is None:
+			if prev is sentinel:
 				try:
 					frappe.conf.pop(key, None)
 				except Exception:
@@ -208,10 +216,43 @@ class TestAntennaFlow(FrappeTestCase):
 		self.__class__._FROZEN_TIME = frozen
 		return frozen
 
-	def _saved_tag_bucket_day_iso(self) -> str:
-		# Production bucketing for RFID Saved Tag Day is `frappe.utils.now_datetime().date().isoformat()`.
-		# We call the same function here (patched deterministically in setUp).
-		return frappe.utils.now_datetime().date().isoformat()
+	def _day_from_ts(self, ts_epoch: int, *, unit: str) -> str:
+		# Production bucketing uses system timezone conversion; derive day from the ts epoch.
+		# This is anchored to ts, not "now", and uses the same conversion path as production.
+		assert unit in ("ms", "sec"), f"Unexpected ts unit: {unit}"
+
+		def _system_tz_name() -> str:
+			tz = ""
+			try:
+				from frappe.utils.data import get_system_timezone  # type: ignore
+
+				tz = str(get_system_timezone() or "")
+			except Exception:
+				tz = ""
+			if not tz:
+				try:
+					tz = str(frappe.get_system_settings("time_zone") or "")
+				except Exception:
+					tz = ""
+			return tz.strip() or "Asia/Kolkata"
+
+		tz_name = _system_tz_name()
+		scale = 1000 if unit == "ms" else 1
+		utc_dt = datetime.datetime.fromtimestamp(ts_epoch / scale, tz=datetime.timezone.utc)
+		assert utc_dt.tzinfo is not None, "utc_dt must be timezone-aware"
+		try:
+			from frappe.utils.data import convert_utc_to_timezone  # type: ignore
+
+			local_dt = convert_utc_to_timezone(utc_dt, tz_name)
+		except Exception:
+			try:
+				from zoneinfo import ZoneInfo
+
+				local_dt = utc_dt.astimezone(ZoneInfo(tz_name))
+			except Exception:
+				local_dt = utc_dt
+		assert local_dt.tzinfo is not None, "local_dt must be timezone-aware"
+		return local_dt.date().isoformat()
 
 	def _safe_select_option(self, doctype: str, fieldname: str, preferred: str) -> str:
 		meta = frappe.get_meta(doctype)
@@ -841,7 +882,7 @@ class TestAntennaFlow(FrappeTestCase):
 		state.insert(ignore_permissions=True)
 
 		_, ts_epoch, _ = self._midday_local_ts_and_day()
-		day = self._saved_tag_bucket_day_iso()
+		day = self._day_from_ts(ts_epoch, unit="ms")
 
 		edge_before_device = frappe.db.count("RFID Edge Event", {"device_id": self.device_id})
 		edge_before_event = frappe.db.count("RFID Edge Event", {"event_id": event_id})
@@ -958,20 +999,52 @@ class TestAntennaFlow(FrappeTestCase):
 
 		event_id = self._new_event_id()
 		_, ts_epoch, _ = self._midday_local_ts_and_day()
-		res1 = api.ingest_tags(
-			device=self.device_id,
-			event_id=event_id,
-			batch_id=self.batch_id,
-			seq=3,
-			ts=ts_epoch,
-			tags=[{"epcId": epc, "antId": 1, "count": 1}],
-		)
+		cache_obj = frappe.cache()
+		CacheCls = type(cache_obj)
+		original_hset = CacheCls.hset
+		assert not getattr(original_hset, "__rfid_test_patch__", False), "Cache hset already patched"
+		device_key = api._normalize_device_id(self.device_id) or "unknown"
+		captured: dict[str, int] = {}
+
+		def _capture_hset(self, name, key, value, *args, **kwargs):
+			if name == api.ANT_STATS_INDEX and key == device_key:
+				captured["last_seen"] = int(value or 0)
+			return original_hset(self, name, key, value, *args, **kwargs)
+
+		_capture_hset.__rfid_test_patch__ = True  # type: ignore[attr-defined]
+
+		with patch.object(CacheCls, "hset", new=_capture_hset):
+			res1 = api.ingest_tags(
+				device=self.device_id,
+				event_id=event_id,
+				batch_id=self.batch_id,
+				seq=3,
+				ts=ts_epoch,
+				tags=[{"epcId": epc, "antId": 1, "count": 1}],
+			)
 		self.assertTrue(res1.get("ok"))
 		edge_row = frappe.db.get_value("RFID Edge Event", {"event_id": event_id}, ["payload_json"], as_dict=True)
 		self.assertTrue(edge_row and edge_row.get("payload_json"), "RFID Edge Event payload_json missing")
 		payload = json.loads(edge_row.get("payload_json") or "{}")
 		self.assertEqual(payload.get("ts"), ts_epoch)
-		day_expected = self._saved_tag_bucket_day_iso()
+		self.assertIs(CacheCls.hset, original_hset)
+		self.assertFalse(getattr(CacheCls.hset, "__rfid_test_patch__", False))
+
+		self.assertIn("last_seen", captured, msg=f"Antenna stats index missing for {device_key}")
+		last_seen = int(captured.get("last_seen") or 0)
+		expected_ms = ts_epoch
+		expected_sec = ts_epoch // 1000
+		if last_seen == expected_ms:
+			unit_detected = "ms"
+		elif last_seen == expected_sec:
+			unit_detected = "sec"
+		else:
+			raise AssertionError(
+				f"Unexpected antenna last_seen: {last_seen} (expected {expected_ms} or {expected_sec})"
+			)
+		self.assertEqual(unit_detected, "ms")
+
+		day_expected = self._day_from_ts(ts_epoch, unit=unit_detected)
 		saved_day = frappe.db.get_value(
 			"RFID Saved Tag Day",
 			{"epc": epc, "day": day_expected},
