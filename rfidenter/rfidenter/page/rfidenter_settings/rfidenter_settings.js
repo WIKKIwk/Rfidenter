@@ -182,6 +182,9 @@ frappe.pages["rfidenter-settings"].on_page_load = function (wrapper) {
 		ttlSec: 0,
 		zebra: { ok: false, message: "", checkedAt: 0 },
 	};
+	const SITE_TOKEN_THROTTLE_MS = 1500;
+	let siteTokenRefreshTimer = null;
+	let siteTokenLastRefreshAt = 0;
 
 	function getStoredAuth() {
 		return String(window.localStorage.getItem(STORAGE_AUTH) || "").trim();
@@ -192,19 +195,45 @@ frappe.pages["rfidenter-settings"].on_page_load = function (wrapper) {
 		setText($userTokenLine, value || "not set");
 	}
 
+	function scheduleSiteTokenRefresh() {
+		const now = Date.now();
+		const elapsed = now - siteTokenLastRefreshAt;
+		const delay = elapsed >= SITE_TOKEN_THROTTLE_MS ? 0 : SITE_TOKEN_THROTTLE_MS - elapsed;
+		if (siteTokenRefreshTimer) return;
+		siteTokenRefreshTimer = window.setTimeout(() => {
+			siteTokenRefreshTimer = null;
+			siteTokenLastRefreshAt = Date.now();
+			refreshSiteTokenStatus({ quiet: true });
+		}, delay);
+	}
+
 	async function refreshSiteTokenStatus({ quiet = false } = {}) {
+		siteTokenLastRefreshAt = Date.now();
 		const hasSystemManager =
 			frappe.session?.user === "Administrator" || (frappe.user && frappe.user.has_role("System Manager"));
 		if (!hasSystemManager) {
 			setText($siteTokenLine, "not authorized (System Manager only)");
 			return;
 		}
+		if (navigator && navigator.onLine === false) {
+			setText($siteTokenLine, "unavailable");
+			return;
+		}
 		try {
 			const r = await frappe.call("rfidenter.rfidenter.api.get_site_token_status");
 			const msg = r?.message;
 			if (!msg || msg.ok !== true) throw new Error("Token status olinmadi");
-			if (typeof msg.has_site_token !== "boolean" || typeof msg.source !== "string") {
-				throw new Error("Token status noto‘g‘ri");
+			if (
+				typeof msg.has_site_token !== "boolean" ||
+				typeof msg.source !== "string" ||
+				typeof msg.masked !== "string"
+			) {
+				setText($siteTokenLine, "error (bad response)");
+				return;
+			}
+			if (!["frappe.conf", "site_config", "default"].includes(msg.source)) {
+				setText($siteTokenLine, "error (bad response)");
+				return;
 			}
 			if (!msg.has_site_token) {
 				setText($siteTokenLine, "not set");
@@ -212,18 +241,39 @@ frappe.pages["rfidenter-settings"].on_page_load = function (wrapper) {
 			}
 			const source = String(msg.source || "").trim() || "default";
 			const masked = String(msg.masked || "").trim();
-			setText($siteTokenLine, masked ? `${masked} (source: ${source})` : `not set (source: ${source})`);
+			if (!masked) {
+				setText($siteTokenLine, "error (mask)");
+				return;
+			}
+			setText($siteTokenLine, `${masked} (source: ${source})`);
 		} catch (e) {
-			const excType = String(e?.exc_type || e?.exc || "").trim();
+			const excType = String(e?.exc_type || "").trim();
+			const exc = String(e?.exc || "").trim();
+			const serverMessages = String(e?._server_messages || "").trim();
 			const message = String(e?.message || e || "").trim();
-			const isPermission = excType === "PermissionError" || message.toLowerCase().includes("permission");
+			const combined = `${excType} ${exc} ${serverMessages} ${message}`.toLowerCase();
+			const isPermission =
+				excType === "PermissionError" ||
+				exc.includes("PermissionError") ||
+				serverMessages.includes("PermissionError");
+			const isNetwork =
+				combined.includes("failed to fetch") ||
+				combined.includes("networkerror") ||
+				combined.includes("timeout") ||
+				combined.includes("timed out") ||
+				combined.includes("timedout");
 			if (isPermission) {
-				setText($siteTokenLine, "not authorized");
-			} else if (!$siteTokenLine.text()) {
-				setText($siteTokenLine, "error/unavailable");
+				setText($siteTokenLine, "not authorized (System Manager only)");
+			} else if (isNetwork) {
+				setText($siteTokenLine, "unavailable");
+			} else {
+				setText($siteTokenLine, "error");
 			}
 			if (!quiet && !isPermission) {
-				frappe.show_alert({ message: `Site token: ${escapeHtml(e?.message || e)}`, indicator: "orange" });
+				frappe.show_alert({
+					message: `Site token: ${escapeHtml(e?.message || e)}`,
+					indicator: "orange",
+				});
 			}
 		}
 	}
@@ -581,8 +631,8 @@ frappe.pages["rfidenter-settings"].on_page_load = function (wrapper) {
 	refreshZebra({ quiet: true });
 	refreshAgents();
 
-	window.addEventListener("focus", () => refreshSiteTokenStatus({ quiet: true }));
+	window.addEventListener("focus", () => scheduleSiteTokenRefresh());
 	document.addEventListener("visibilitychange", () => {
-		if (!document.hidden) refreshSiteTokenStatus({ quiet: true });
+		if (!document.hidden) scheduleSiteTokenRefresh();
 	});
 };
