@@ -23,13 +23,21 @@ ANT_STATS_INDEX = "rfidenter_ant_stats_index"
 ANT_STATS_PREFIX = "rfidenter_ant_stats:"
 
 
+def _get_rfidenter_conf(key: str, default: object) -> object:
+    conf = getattr(frappe, "conf", None) or {}
+    if isinstance(conf, dict) and key in conf:
+        return conf[key]
+
+    site_conf = frappe.get_site_config() or {}
+    if isinstance(site_conf, dict) and key in site_conf:
+        return site_conf[key]
+
+    return default
+
+
 def _get_site_token() -> str:
 	# Prefer per-site config, fallback to common config.
-	try:
-		site_conf = frappe.get_site_config(silent=True) or {}
-	except Exception:
-		site_conf = {}
-	token = (site_conf.get("rfidenter_token") or frappe.conf.get("rfidenter_token") or "").strip()
+	token = str(_get_rfidenter_conf("rfidenter_token", "") or "").strip()
 	return token
 
 
@@ -75,12 +83,7 @@ def _now_ms() -> int:
 
 
 def _agent_ttl_sec() -> int:
-	try:
-		site_conf = frappe.get_site_config(silent=True) or {}
-	except Exception:
-		site_conf = {}
-
-	raw = site_conf.get("rfidenter_agent_ttl_sec") or frappe.conf.get("rfidenter_agent_ttl_sec") or 60
+	raw = _get_rfidenter_conf("rfidenter_agent_ttl_sec", 60)
 	try:
 		ttl = int(raw)
 	except Exception:
@@ -89,14 +92,7 @@ def _agent_ttl_sec() -> int:
 
 
 def _dedup_by_ant_enabled() -> bool:
-	try:
-		site_conf = frappe.get_site_config(silent=True) or {}
-	except Exception:
-		site_conf = {}
-
-	raw = site_conf.get("rfidenter_dedup_by_ant")
-	if raw is None:
-		raw = frappe.conf.get("rfidenter_dedup_by_ant")
+	raw = _get_rfidenter_conf("rfidenter_dedup_by_ant", True)
 	if raw is None:
 		return True
 	if isinstance(raw, bool):
@@ -106,12 +102,7 @@ def _dedup_by_ant_enabled() -> bool:
 
 
 def _dedup_ttl_sec() -> int:
-	try:
-		site_conf = frappe.get_site_config(silent=True) or {}
-	except Exception:
-		site_conf = {}
-
-	raw = site_conf.get("rfidenter_dedup_ttl_sec") or frappe.conf.get("rfidenter_dedup_ttl_sec") or 86400
+	raw = _get_rfidenter_conf("rfidenter_dedup_ttl_sec", 86400)
 	try:
 		ttl = int(raw)
 	except Exception:
@@ -120,12 +111,7 @@ def _dedup_ttl_sec() -> int:
 
 
 def _antenna_ttl_sec() -> int:
-	try:
-		site_conf = frappe.get_site_config(silent=True) or {}
-	except Exception:
-		site_conf = {}
-
-	raw = site_conf.get("rfidenter_antenna_ttl_sec") or frappe.conf.get("rfidenter_antenna_ttl_sec") or 600
+	raw = _get_rfidenter_conf("rfidenter_antenna_ttl_sec", 600)
 	try:
 		ttl = int(raw)
 	except Exception:
@@ -489,12 +475,7 @@ def _normalize_bool(raw: Any) -> bool | None:
 
 
 def _scale_cache_ttl_sec() -> int:
-	try:
-		site_conf = frappe.get_site_config(silent=True) or {}
-	except Exception:
-		site_conf = {}
-
-	raw = site_conf.get("rfidenter_scale_ttl_sec") or frappe.conf.get("rfidenter_scale_ttl_sec") or 300
+	raw = _get_rfidenter_conf("rfidenter_scale_ttl_sec", 300)
 	try:
 		ttl = int(raw)
 	except Exception:
@@ -503,12 +484,7 @@ def _scale_cache_ttl_sec() -> int:
 
 
 def _rpc_timeout_sec(raw: Any | None = None) -> int:
-	try:
-		site_conf = frappe.get_site_config(silent=True) or {}
-	except Exception:
-		site_conf = {}
-
-	fallback = site_conf.get("rfidenter_rpc_timeout_sec") or frappe.conf.get("rfidenter_rpc_timeout_sec") or 30
+	fallback = _get_rfidenter_conf("rfidenter_rpc_timeout_sec", 30)
 
 	value = raw if raw is not None else fallback
 	try:
