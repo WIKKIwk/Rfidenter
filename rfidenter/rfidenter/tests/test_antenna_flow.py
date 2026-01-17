@@ -948,9 +948,9 @@ class TestAntennaFlow(FrappeTestCase):
 				return False
 
 		def _assert_has_creation(doctype: str) -> None:
-			meta = frappe.get_meta(doctype)
-			if not meta.get_field("creation"):
-				raise AssertionError(f"{doctype} missing creation field")
+			columns = {col.lower() for col in frappe.db.get_table_columns(doctype)}
+			if "creation" not in columns:
+				raise AssertionError(f"{doctype} missing creation column")
 
 		def _count_doctype(doctype: str) -> int:
 			_assert_has_creation(doctype)
