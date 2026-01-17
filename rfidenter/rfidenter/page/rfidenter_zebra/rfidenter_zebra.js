@@ -1260,10 +1260,10 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 			}
 		}
 
-			function ensureBatchControls() {
-				if (batchControl.product || !$batchProductWrap.length) return;
-				$batchProductWrap.empty();
-				batchControl.product = frappe.ui.form.make_control({
+		function ensureBatchControls() {
+			if (batchControl.product || !$batchProductWrap.length) return;
+			$batchProductWrap.empty();
+			batchControl.product = frappe.ui.form.make_control({
 				df: {
 					label: "Product",
 					description: "",
@@ -1280,8 +1280,20 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 			});
 			batchControl.product.make_input();
 			batchControl.product.toggle_label(false);
+			pruneBatchProductInputs();
 			const saved = getBatchProduct();
 			if (saved) batchControl.product.set_value(saved);
+		}
+
+		function pruneBatchProductInputs() {
+			if (!$batchProductWrap.length) return;
+			const inputs = $batchProductWrap.find("input.form-control");
+			if (inputs.length <= 1) return;
+			inputs.slice(0, -1).each((_, el) => {
+				const $el = $(el);
+				const $wrap = $el.closest(".frappe-control, .control-input-wrapper, .form-group");
+				$wrap.remove();
+			});
 		}
 
 		async function checkItemReceiptSettings(itemCode) {
