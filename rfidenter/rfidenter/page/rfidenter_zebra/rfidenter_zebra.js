@@ -91,7 +91,7 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 	const BATCH_BACKOFF_MAX_MS = 30000;
 	// Realtime scale UI is removed to prevent Android app logout; UI is status-driven only.
 
-	const state = {
+		const state = {
 		connMode: String(window.localStorage.getItem(STORAGE_CONN_MODE) || "agent"),
 		agentId: String(window.localStorage.getItem(STORAGE_AGENT_ID) || ""),
 		agents: [],
@@ -102,14 +102,19 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 		devices: [],
 		result: null,
 		mode: "manual",
-		batch: {
-			lastEventSeq: null,
-			authBlocked: false,
-			pollTimer: null,
-			pollTimeout: null,
-			backoffCount: 0,
-			pollMode: "",
-		},
+			batch: {
+				lastEventSeq: null,
+				currentBatch: "",
+				status: "Stopped",
+				busy: false,
+				warning: "",
+				lastProductForBatchId: "",
+				authBlocked: false,
+				pollTimer: null,
+				pollTimeout: null,
+				backoffCount: 0,
+				pollMode: "",
+			},
 		cancelToken: 0,
 	};
 	let autoFallbackAllowed = true;
@@ -607,7 +612,7 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 							</div>
 							<div class="col-md-4 rfz-control">
 								<label class="text-muted">Batch ID</label>
-								<input class="form-control input-sm rfz-batch-id" placeholder="BATCH-001" />
+								<div class="rfz-batch-value rfz-batch-id-display">--</div>
 							</div>
 							<div class="col-md-4 rfz-control">
 								<label class="text-muted">Product</label>
@@ -853,6 +858,7 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 	const $devices = $body.find(".rfidenter-zebra-devices");
 	const $batchDevice = $body.find(".rfz-device-id");
 	const $batchId = $body.find(".rfz-batch-id");
+	const $batchIdDisplay = $body.find(".rfz-batch-id-display");
 	const $batchProductWrap = $body.find(".rfz-batch-product");
 	const $batchStart = $body.find(".rfz-batch-start");
 	const $batchStop = $body.find(".rfz-batch-stop");
@@ -923,18 +929,23 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 			if ($batchDevice.length) $batchDevice.val(v);
 		}
 
-		function getBatchId() {
+		function getBatchId({ preferCurrent = true } = {}) {
 			const raw = String($batchId.val() || "").trim();
 			if (raw) return raw;
 			const stored = String(window.localStorage.getItem(STORAGE_BATCH_ID) || "").trim();
-			if (stored && $batchId.length) $batchId.val(stored);
-			return stored;
+			if (stored) {
+				if ($batchIdDisplay.length) $batchIdDisplay.text(stored);
+				return stored;
+			}
+			if (preferCurrent) return String(state.batch.currentBatch || "").trim();
+			return "";
 		}
 
 		function setBatchId(value) {
 			const v = String(value || "").trim();
 			window.localStorage.setItem(STORAGE_BATCH_ID, v);
 			if ($batchId.length) $batchId.val(v);
+			if ($batchIdDisplay.length) $batchIdDisplay.text(v || "--");
 		}
 
 		function getBatchProduct() {
@@ -950,6 +961,26 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 				const current = String(batchControl.product.get_value?.() || "").trim();
 				if (current !== v) batchControl.product.set_value(v);
 			}
+			if (v) {
+				ensureBatchIdFromProduct(v);
+				checkItemReceiptSettings(v).catch(() => {});
+			}
+		}
+
+		function generateBatchId(productId) {
+			const p = String(productId || "").trim().replace(/[^A-Za-z0-9_-]/g, "").slice(0, 12);
+			const d = new Date();
+			const pad = (n) => String(n).padStart(2, "0");
+			const stamp = `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
+			return `${p || "BATCH"}-${stamp}`;
+		}
+
+		function ensureBatchIdFromProduct(productId) {
+			if (state.batch.status === "Running") return;
+			const currentProduct = String(productId || "").trim();
+			if (!currentProduct || currentProduct === state.batch.lastProductForBatchId) return;
+			state.batch.lastProductForBatchId = currentProduct;
+			setBatchId(generateBatchId(productId));
 		}
 
 		function sanitizeZplText(value) {
@@ -1229,9 +1260,10 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 			}
 		}
 
-		function ensureBatchControls() {
-			if (batchControl.product || !$batchProductWrap.length) return;
-			batchControl.product = frappe.ui.form.make_control({
+			function ensureBatchControls() {
+				if (batchControl.product || !$batchProductWrap.length) return;
+				$batchProductWrap.empty();
+				batchControl.product = frappe.ui.form.make_control({
 				df: {
 					label: "Product",
 					description: "",
@@ -1250,6 +1282,40 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 			batchControl.product.toggle_label(false);
 			const saved = getBatchProduct();
 			if (saved) batchControl.product.set_value(saved);
+		}
+
+		async function checkItemReceiptSettings(itemCode) {
+			const code = String(itemCode || "").trim();
+			if (!code) return;
+			try {
+				const r = await frappe.call("frappe.client.get_value", {
+					doctype: "RFID Zebra Item Receipt Setting",
+					filters: { item_code: code },
+					fieldname: ["company", "warehouse", "name"],
+				});
+				const v = r?.message || null;
+				if (!v || !v.name) {
+					return setBatchWarning("Ogohlantirish: Item receipt setting yo‘q (Material Issue).");
+				}
+				const company = String(v.company || "").trim();
+				const warehouse = String(v.warehouse || "").trim();
+				if (!company || !warehouse) {
+					return setBatchWarning("Ogohlantirish: Item receipt setting (company/warehouse) to‘liq emas.");
+				}
+				setBatchWarning("");
+			} catch (err) {
+				setBatchWarning("Ogohlantirish: setting tekshirilmadi.");
+			}
+		}
+
+		function setBatchWarning(message) {
+			state.batch.warning = String(message || "").trim();
+			if (state.batch.busy || state.batch.status === "Running") return;
+			if (!state.batch.warning) {
+				if ($batchStatus.text().startsWith("Ogohlantirish")) setPill($batchStatus, "");
+				return;
+			}
+			setPill($batchStatus, state.batch.warning, { indicator: "orange" });
 		}
 
 		async function ensureItemControls() {
@@ -1453,16 +1519,20 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 			else $el.removeAttr("title");
 		}
 
-	function setBatchControlsEnabled(enabled) {
-		const disabled = !enabled || state.batch.authBlocked;
-		$batchStart.prop("disabled", disabled);
-		$batchStop.prop("disabled", disabled);
-		$batchSwitch.prop("disabled", disabled);
-		const inputsDisabled = !enabled;
-		$batchDevice.prop("disabled", inputsDisabled);
-		$batchId.prop("disabled", inputsDisabled);
-		batchControl.product?.$input?.prop("disabled", inputsDisabled);
-	}
+		function setBatchControlsEnabled(enabled) {
+			const disabled = !enabled || state.batch.authBlocked;
+			const running = state.batch.status === "Running";
+			const busy = state.batch.busy === true;
+			const hasDevice = Boolean(getDeviceId());
+			const hasProduct = Boolean(getBatchProduct());
+			$batchStart.prop("disabled", disabled || busy || running || !hasDevice || !hasProduct);
+			$batchStop.prop("disabled", disabled || busy || !running);
+			$batchSwitch.prop("disabled", disabled || busy || !hasDevice || !hasProduct);
+			const inputsDisabled = !enabled || running || busy;
+			$batchDevice.prop("disabled", inputsDisabled);
+			$batchId.prop("disabled", true);
+			batchControl.product?.$input?.prop("disabled", inputsDisabled);
+		}
 
 		function syncDeviceIdFromAgent() {
 			if (!$batchDevice.length) return;
@@ -1634,14 +1704,16 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 			}
 		}
 
-		function renderBatchState(data, meta) {
-			const status = String(data?.status || "Stopped").trim() || "Stopped";
-			const pauseReason = String(data?.pause_reason || "").trim();
+			function renderBatchState(data, meta) {
+				const status = String(data?.status || "Stopped").trim() || "Stopped";
+				const pauseReason = String(data?.pause_reason || "").trim();
 			const lastSeen = data?.last_seen_at || "";
 			const lastSeq = data?.last_event_seq;
 			const currentBatch = String(data?.current_batch_id || "").trim();
 			const currentProduct = String(data?.current_product || "").trim();
 			const pendingProduct = String(data?.pending_product || "").trim();
+			state.batch.status = status;
+			state.batch.currentBatch = currentBatch;
 
 			const pauseKey = pauseReason.replace(/[^a-zA-Z_]/g, "").toUpperCase();
 			const isPrinterPause = status === "Paused" && pauseKey.startsWith("PRINTER");
@@ -1668,8 +1740,9 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 			$batchCurrentProduct.text(currentProduct || "--");
 			$batchPendingProduct.text(pendingProduct || "--");
 
-			if (currentBatch && !getBatchId()) setBatchId(currentBatch);
+			if (currentBatch && !getBatchId({ preferCurrent: false })) setBatchId(currentBatch);
 			if (currentProduct && !getBatchProduct()) setBatchProduct(currentProduct);
+			setBatchControlsEnabled(true);
 
 			state.batch.lastEventSeq = Number.isFinite(Number(lastSeq)) ? Number(lastSeq) : state.batch.lastEventSeq;
 
@@ -1725,54 +1798,73 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 			}
 		}
 
-	async function startBatch() {
-		const deviceId = getDeviceId();
-		const batchId = getBatchId();
-		const productId = getBatchProduct();
-		if (!deviceId) return setPill($batchStatus, "Device ID kerak", { indicator: "orange" });
-		if (!batchId) return setPill($batchStatus, "Batch ID kerak", { indicator: "orange" });
-		if (!productId) return setPill($batchStatus, "Product tanlang", { indicator: "orange" });
-		setPill($batchStatus, "Start...", { indicator: "gray" });
-		const payload = {
-			event_id: newEventId(),
-			device_id: deviceId,
-			batch_id: batchId,
-			product_id: productId,
-		};
-		const msg = await callBatchEndpoint("rfidenter.edge_batch_start", payload);
-		if (msg) pollDeviceStatus({ quiet: true });
-	}
+		async function startBatch() {
+			if (state.batch.busy) return;
+			const deviceId = getDeviceId();
+			const productId = getBatchProduct();
+			if (!deviceId) return setPill($batchStatus, "Device ID kerak", { indicator: "orange" });
+			if (!productId) return setPill($batchStatus, "Product tanlang", { indicator: "orange" });
+			await checkItemReceiptSettings(productId);
+			const batchId = getBatchId({ preferCurrent: false }) || generateBatchId(productId);
+			setBatchId(batchId);
+			setPill($batchStatus, "Start...", { indicator: "gray" });
+			state.batch.busy = true;
+			setBatchControlsEnabled(true);
+			const payload = {
+				event_id: newEventId(),
+				device_id: deviceId,
+				batch_id: batchId,
+				product_id: productId,
+			};
+			const msg = await callBatchEndpoint("rfidenter.edge_batch_start", payload);
+			state.batch.busy = false;
+			if (msg) state.batch.status = "Running";
+			setBatchControlsEnabled(true);
+			if (msg) pollDeviceStatus({ quiet: true });
+		}
 
-	async function stopBatch() {
-		const deviceId = getDeviceId();
-		const batchId = getBatchId();
-		if (!deviceId) return setPill($batchStatus, "Device ID kerak", { indicator: "orange" });
-		if (!batchId) return setPill($batchStatus, "Batch ID kerak", { indicator: "orange" });
-		setPill($batchStatus, "Stop...", { indicator: "gray" });
-		const payload = {
-			event_id: newEventId(),
-			device_id: deviceId,
-			batch_id: batchId,
-		};
-		const msg = await callBatchEndpoint("rfidenter.edge_batch_stop", payload);
-		if (msg) pollDeviceStatus({ quiet: true });
-	}
+		async function stopBatch() {
+			if (state.batch.busy) return;
+			const deviceId = getDeviceId();
+			const batchId = getBatchId({ preferCurrent: true });
+			if (!deviceId) return setPill($batchStatus, "Device ID kerak", { indicator: "orange" });
+			if (!batchId) return setPill($batchStatus, "Batch ID topilmadi", { indicator: "orange" });
+			setPill($batchStatus, "Stop...", { indicator: "gray" });
+			state.batch.busy = true;
+			setBatchControlsEnabled(true);
+			const payload = {
+				event_id: newEventId(),
+				device_id: deviceId,
+				batch_id: batchId,
+			};
+			const msg = await callBatchEndpoint("rfidenter.edge_batch_stop", payload);
+			state.batch.busy = false;
+			if (msg) state.batch.status = "Stopped";
+			setBatchControlsEnabled(true);
+			if (msg) pollDeviceStatus({ quiet: true });
+		}
 
-	async function switchBatchProduct() {
-		const deviceId = getDeviceId();
-		const batchId = getBatchId();
-		const productId = getBatchProduct();
-		if (!deviceId) return setPill($batchStatus, "Device ID kerak", { indicator: "orange" });
-		if (!batchId) return setPill($batchStatus, "Batch ID kerak", { indicator: "orange" });
-		if (!productId) return setPill($batchStatus, "Product tanlang", { indicator: "orange" });
-		setPill($batchStatus, "Switch...", { indicator: "gray" });
-		const payload = {
-			event_id: newEventId(),
-			device_id: deviceId,
-			batch_id: batchId,
-			product_id: productId,
-		};
-		const msg = await callBatchEndpoint("rfidenter.edge_product_switch", payload);
+		async function switchBatchProduct() {
+			if (state.batch.busy) return;
+			const deviceId = getDeviceId();
+			const batchId = getBatchId({ preferCurrent: true });
+			const productId = getBatchProduct();
+			if (!deviceId) return setPill($batchStatus, "Device ID kerak", { indicator: "orange" });
+			if (!batchId) return setPill($batchStatus, "Batch ID topilmadi", { indicator: "orange" });
+			if (!productId) return setPill($batchStatus, "Product tanlang", { indicator: "orange" });
+			setPill($batchStatus, "Switch...", { indicator: "gray" });
+			state.batch.busy = true;
+			setBatchControlsEnabled(true);
+			const payload = {
+				event_id: newEventId(),
+				device_id: deviceId,
+				batch_id: batchId,
+				product_id: productId,
+			};
+			const msg = await callBatchEndpoint("rfidenter.edge_product_switch", payload);
+			state.batch.busy = false;
+			if (msg) state.batch.status = "Running";
+			setBatchControlsEnabled(true);
 			if (msg) pollDeviceStatus({ quiet: true });
 		}
 
@@ -2193,13 +2285,15 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 		setDeviceId($batchDevice.val());
 		pollDeviceStatus({ quiet: true });
 	});
-	$batchId.on("change", () => {
-		setBatchId($batchId.val());
-	});
-	$batchId.on("keydown", (e) => {
-		if (e.key !== "Enter") return;
-		setBatchId($batchId.val());
-	});
+		if ($batchId.length) {
+			$batchId.on("change", () => {
+				setBatchId($batchId.val());
+			});
+			$batchId.on("keydown", (e) => {
+				if (e.key !== "Enter") return;
+				setBatchId($batchId.val());
+			});
+		}
 	$batchStart.on("click", () => startBatch());
 	$batchStop.on("click", () => stopBatch());
 	$batchSwitch.on("click", () => switchBatchProduct());
