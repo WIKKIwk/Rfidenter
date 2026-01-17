@@ -104,6 +104,8 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 		mode: "manual",
 			batch: {
 				lastEventSeq: null,
+				lastNoticeSeq: null,
+				noticeTimer: null,
 				currentBatch: "",
 				status: "Stopped",
 				busy: false,
@@ -1335,6 +1337,19 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 			setPill($batchStatus, state.batch.warning, { indicator: "orange" });
 		}
 
+		function showBatchNotice(text) {
+			if (state.batch.authBlocked || state.batch.busy) return;
+			const label = String(text || "").trim();
+			if (!label) return;
+			setPill($batchStatus, label, { indicator: "green" });
+			if (state.batch.noticeTimer) window.clearTimeout(state.batch.noticeTimer);
+			state.batch.noticeTimer = window.setTimeout(() => {
+				state.batch.noticeTimer = null;
+				if (state.batch.warning) setBatchWarning(state.batch.warning);
+				else setPill($batchStatus, "");
+			}, 1500);
+		}
+
 		async function ensureItemControls() {
 			if (itemState.controlsReady) return;
 			if (!$itemGroupWrap.length || !$itemWrap.length) return;
@@ -1724,13 +1739,14 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 			function renderBatchState(data, meta) {
 				const status = String(data?.status || "Stopped").trim() || "Stopped";
 				const pauseReason = String(data?.pause_reason || "").trim();
-			const lastSeen = data?.last_seen_at || "";
-			const lastSeq = data?.last_event_seq;
-			const currentBatch = String(data?.current_batch_id || "").trim();
-			const currentProduct = String(data?.current_product || "").trim();
-			const pendingProduct = String(data?.pending_product || "").trim();
-			state.batch.status = status;
-			state.batch.currentBatch = currentBatch;
+				const lastSeen = data?.last_seen_at || "";
+				const lastSeq = data?.last_event_seq;
+				const lastEventType = String(data?.last_event_type || "").trim();
+				const currentBatch = String(data?.current_batch_id || "").trim();
+				const currentProduct = String(data?.current_product || "").trim();
+				const pendingProduct = String(data?.pending_product || "").trim();
+				state.batch.status = status;
+				state.batch.currentBatch = currentBatch;
 
 			const pauseKey = pauseReason.replace(/[^a-zA-Z_]/g, "").toUpperCase();
 			const isPrinterPause = status === "Paused" && pauseKey.startsWith("PRINTER");
@@ -1761,7 +1777,14 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 			if (currentProduct && !getBatchProduct()) setBatchProduct(currentProduct);
 			setBatchControlsEnabled(true);
 
-			state.batch.lastEventSeq = Number.isFinite(Number(lastSeq)) ? Number(lastSeq) : state.batch.lastEventSeq;
+			const lastSeqNum = Number.isFinite(Number(lastSeq)) ? Number(lastSeq) : null;
+			if (lastSeqNum !== null) {
+				if (lastSeqNum !== state.batch.lastEventSeq && lastEventType === "print_completed") {
+					showBatchNotice(`Print OK: ${currentProduct || "Product"}`);
+					state.batch.lastNoticeSeq = lastSeqNum;
+				}
+				state.batch.lastEventSeq = lastSeqNum;
+			}
 
 			const printDepth = meta?.print ?? meta?.print_outbox_depth ?? data?.print_outbox_depth;
 			const erpDepth = meta?.erp ?? meta?.erp_outbox_depth ?? data?.erp_outbox_depth;

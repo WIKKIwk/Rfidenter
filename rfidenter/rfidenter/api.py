@@ -1555,6 +1555,15 @@ def get_device_snapshot(**kwargs) -> dict[str, Any]:
 			"last_seen_at": row.get("last_seen_at"),
 		}
 
+		last_seq = row.get("last_event_seq")
+		last_batch = row.get("current_batch_id")
+		if last_seq is not None and last_batch:
+			state["last_event_type"] = frappe.db.get_value(
+				"RFID Edge Event",
+				{"device_id": device_id, "batch_id": last_batch, "seq": last_seq},
+				"event_type",
+			)
+
 	agent_id = _sanitize_agent_id(body.get("agent_id") or device_id)
 	agent_depth = (
 		frappe.db.count("RFID Agent Request", {"agent_id": agent_id, "status": ["in", ["Queued", "Sent"]]})
