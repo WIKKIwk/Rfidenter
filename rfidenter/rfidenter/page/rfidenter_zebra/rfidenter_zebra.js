@@ -932,6 +932,10 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 		}
 
 		function getBatchId({ preferCurrent = true } = {}) {
+			if (preferCurrent) {
+				const current = String(state.batch.currentBatch || "").trim();
+				if (current) return current;
+			}
 			const raw = String($batchId.val() || "").trim();
 			if (raw) return raw;
 			const stored = String(window.localStorage.getItem(STORAGE_BATCH_ID) || "").trim();
@@ -939,7 +943,6 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 				if ($batchIdDisplay.length) $batchIdDisplay.text(stored);
 				return stored;
 			}
-			if (preferCurrent) return String(state.batch.currentBatch || "").trim();
 			return "";
 		}
 
