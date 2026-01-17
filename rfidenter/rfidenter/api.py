@@ -1376,17 +1376,24 @@ def edge_batch_stop(**kwargs) -> dict[str, Any]:
 		frappe.throw("device_id kerak.", frappe.ValidationError)
 
 	batch_id = _normalize_batch_id(body.get("batch_id"))
-	if not batch_id:
-		frappe.throw("batch_id kerak.", frappe.ValidationError)
-
 	seq = _normalize_seq(body.get("seq"))
+	force = _normalize_bool(body.get("force") or body.get("force_stop")) is True
 
 	if frappe.db.exists("RFID Edge Event", {"event_id": event_id}):
 		return {"ok": True, "duplicate": True}
 
 	state = _get_batch_state_for_update(device_id)
+	if not batch_id:
+		if force and state.current_batch_id:
+			batch_id = state.current_batch_id
+		else:
+			frappe.throw("batch_id kerak.", frappe.ValidationError)
+
 	if state.current_batch_id and batch_id != state.current_batch_id:
-		return _conflict_response("BATCH_MISMATCH", "Batch mismatch.")
+		if force:
+			batch_id = state.current_batch_id
+		else:
+			return _conflict_response("BATCH_MISMATCH", "Batch mismatch.")
 
 	try:
 		seq_val = _resolve_control_seq(state, seq, batch_id=batch_id, allow_batch_reset=False)

@@ -1877,6 +1877,7 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 				event_id: newEventId(),
 				device_id: deviceId,
 				batch_id: batchId,
+				force: 1,
 			};
 			const msg = await callBatchEndpoint("rfidenter.edge_batch_stop", payload);
 			state.batch.busy = false;
