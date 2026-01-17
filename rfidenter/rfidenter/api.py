@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import datetime
 import hashlib
 import json
 import re
@@ -150,6 +151,21 @@ def _require_auth_for_ingest() -> None:
 
 def _now_ms() -> int:
 	return int(time.time() * 1000)
+
+
+def _datetime_from_ts_ms(ts_raw: Any | None) -> datetime.datetime:
+	try:
+		ts_ms = int(float(ts_raw))
+	except Exception:
+		return frappe.utils.now_datetime()
+
+	utc_dt = datetime.datetime.fromtimestamp(ts_ms / 1000, tz=datetime.timezone.utc)
+	try:
+		tz_name = frappe.utils.get_system_timezone()
+		local_dt = frappe.utils.data.convert_utc_to_timezone(utc_dt, tz_name)
+	except Exception:
+		local_dt = utc_dt
+	return local_dt.replace(tzinfo=None)
 
 
 def _agent_ttl_sec() -> int:
@@ -732,7 +748,7 @@ def ingest_tags(**kwargs) -> dict[str, Any]:
 	saved_count = 0
 	saved_updated = False
 	try:
-		saved_count = _upsert_saved_tags(agg_tags, device)
+		saved_count = _upsert_saved_tags(agg_tags, device, ts)
 		saved_updated = True
 	except Exception:
 		saved_updated = False
@@ -1032,11 +1048,11 @@ def get_scale_weight(device: str | None = None) -> dict[str, Any]:
 	return {"ok": bool(reading), "reading": reading or {}}
 
 
-def _upsert_saved_tags(tags: list[dict[str, Any]], device: str) -> int:
+def _upsert_saved_tags(tags: list[dict[str, Any]], device: str, ts: Any | None = None) -> int:
 	if not tags:
 		return 0
 	device_norm = str(device or "").strip()[:64]
-	now = frappe.utils.now_datetime()
+	now = _datetime_from_ts_ms(ts)
 	day = now.date().isoformat()
 	rows: list[tuple[Any, ...]] = []
 	day_rows: list[tuple[Any, ...]] = []
