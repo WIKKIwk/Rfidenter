@@ -1300,7 +1300,7 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 			$batchProductWrap
 				.find("input.form-control")
 				.not(":last")
-				each((_, el) => $(el).closest(".frappe-control, .control-input-wrapper, .form-group").remove());
+				.each((_, el) => $(el).closest(".frappe-control, .control-input-wrapper, .form-group").remove());
 		}
 
 		async function checkItemReceiptSettings(itemCode) {
