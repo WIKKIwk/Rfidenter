@@ -1287,13 +1287,9 @@ frappe.pages["rfidenter-zebra"].on_page_load = function (wrapper) {
 
 		function pruneBatchProductInputs() {
 			if (!$batchProductWrap.length) return;
-			const inputs = $batchProductWrap.find("input.form-control");
-			if (inputs.length <= 1) return;
-			inputs.slice(0, -1).each((_, el) => {
-				const $el = $(el);
-				const $wrap = $el.closest(".frappe-control, .control-input-wrapper, .form-group");
-				$wrap.remove();
-			});
+			const controls = $batchProductWrap.children(".frappe-control");
+			if (controls.length <= 1) return;
+			controls.slice(0, -1).remove();
 		}
 
 		async function checkItemReceiptSettings(itemCode) {
